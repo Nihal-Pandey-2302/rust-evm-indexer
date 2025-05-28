@@ -1,6 +1,12 @@
 [package]
 name = "evm_indexer"
 version = "0.1.0"
-edition = "2024"
+edition = "2021" # Or your current Rust edition
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
+ethers = { version = "2.0.14" } # For Ethereum interaction
+tokio = { version = "1", features = ["full"] }    # Async runtime
+serde = { version = "1.0", features = ["derive"] } # Serialization/Deserialization
+serde_json = "1.0"                                # JSON support for Serde
+eyre = "0.6"                                      # For better error handling
