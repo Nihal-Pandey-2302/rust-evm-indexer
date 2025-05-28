@@ -28,8 +28,6 @@ A high-performance Ethereum Virtual Machine (EVM) historical data ingester and q
   * [x] Asynchronous processing using Tokio.
   * [x] Interaction with Ethereum nodes via `ethers-rs`.
 
-*(Use checkboxes like `[ ]` for planned features and `[x]` for completed ones. Update as you progress!)*
-
 ## 🛠️ Tech Stack
 
 * **Language:** Rust (Edition 2021)
