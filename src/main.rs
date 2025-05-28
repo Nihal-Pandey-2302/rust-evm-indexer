@@ -1,18 +1,24 @@
+use dotenvy::dotenv; // Import the dotenv function
 use ethers::providers::{Http, Middleware, Provider};
-use eyre::Result; // Use eyre's Result for convenient error handling
+use eyre::Result;
+use std::env; // To read environment variables
 
-// Replace this with your actual Ethereum node RPC URL
-// You can get one from services like Infura, Alchemy, or use your own local node.
-const RPC_URL: &str = "https://eth-mainnet.g.alchemy.com/v2/RdPcgIk1IKRRxNSsXc758zN7WgTCN0_9";
-
-#[tokio::main] // This macro sets up the Tokio runtime for our async main function
+#[tokio::main]
 async fn main() -> Result<()> {
-    println!("Attempting to connect to Ethereum node at: {}", RPC_URL);
+    // Load environment variables from .env file
+    dotenv().ok(); // .ok() converts Result to Option, effectively ignoring if .env is not found (e.g., in production)
+
+    println!("Attempting to connect to Ethereum node...");
+
+    // Read the RPC URL from an environment variable
+    let rpc_url = env::var("ETH_RPC_URL")
+        .map_err(|e| eyre::eyre!("ETH_RPC_URL not found in environment: {}", e))?;
+
+    println!("Using RPC URL: {}", rpc_url); // Be careful about logging sensitive URLs in production logs
 
     // Create a provider
-    let provider = Provider::<Http>::try_from(RPC_URL)
+    let provider = Provider::<Http>::try_from(rpc_url.as_str()) // Use rpc_url.as_str() as try_from expects &str
         .map_err(|e| eyre::eyre!("Failed to create provider: {}", e))?;
-    // The .map_err part provides more context if Provider::try_from fails.
 
     println!("Successfully connected to provider.");
 
