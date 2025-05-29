@@ -13,15 +13,14 @@ A high-performance Ethereum Virtual Machine (EVM) historical data ingester and q
 ## ✨ Features
 
 * **Data Ingestion:**
-  * [x] Connect to an Ethereum node and fetch the current block number.
-  * [ ] Fetch historical block data (headers, full transaction objects) for a range of blocks.
-  * [ ] Extract transactions from blocks.
-  * [ ] Extract event logs from transaction receipts.
+  * [x] Fetch historical blocks from an Ethereum node.
+  * [x] Extract transactions from blocks.
+  * [x] Extract event logs from transaction receipts.
 * **Storage:**
-  * [ ] Store ingested data in a PostgreSQL database.
-  * [ ] Design an efficient and scalable database schema.
+  * [x] Store ingested data (blocks, transactions, logs) in a PostgreSQL database.
+  * [ ] Design an efficient and scalable database schema. (Designed v1, can be refined)
 * **API:**
-  * [ ] Develop a REST API (using Axum/Actix-Web or similar).
+  * [ ] Develop a REST API (using Axum/Actix-Web).
   * [ ] Implement a `getLogs` endpoint mimicking standard JSON-RPC functionality.
 * **Core:**
   * Built with Rust for performance and safety.
