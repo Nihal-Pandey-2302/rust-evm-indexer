@@ -80,11 +80,7 @@ A high-performance Ethereum Virtual Machine (EVM) historical data ingester and q
 
 * **Current Status:** Initial project setup complete. Able to connect to an Ethereum node via `ethers-rs` and Tokio to fetch and display the current block number.
 * **Next Steps:**
-    1. Implement a robust loop for fetching historical block data (headers and transactions).
-    2. Define the database schema for blocks, transactions, and event logs.
-    3. Integrate PostgreSQL using `sqlx` for data storage.
-    4. Begin development of the `getLogs` API endpoint.
-
+    1. Begin development of the `getLogs` API endpoint.
 
 
 ## 📜 License
