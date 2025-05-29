@@ -2,7 +2,7 @@
 
 use ethers::core::types::{Address, H256, U256, U64}; // Ensure U64 is imported
 use serde::{Serialize, Deserialize};
-// H160 is often used for addresses in logs too
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MyLog {
@@ -14,11 +14,6 @@ pub struct MyLog {
     pub address: Address,               // Address of the contract that emitted the log
     pub data: String,                   // Hex string of non-indexed log data
     pub topics: Vec<String>,            // Vec of H256 topics, converted to hex strings
-    // Ethers-rs Log struct also has:
-    // log_type: Option<String> (e.g., "mined", "pending")
-    // removed: Option<bool> (if log was removed due to reorg)
-    // We can add these if they are important for your use case.
-    // For now, focusing on core data.
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

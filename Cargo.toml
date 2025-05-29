@@ -14,3 +14,5 @@ dotenvy = "0.15"                                  # For environment variable man
 sqlx = { version = "0.8.6", features = [ "runtime-tokio-rustls", "postgres", "macros", "chrono", "rust_decimal" ] }
 rust_decimal = "1.33" # For mapping U256 to NUMERIC if you choose decimal types
 rust_decimal_macros = "1.33"
+axum = "0.8.4"
+
