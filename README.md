@@ -1,6 +1,6 @@
 # EVM Indexer in Rust 🦀
 
-A high-performance Ethereum Virtual Machine (EVM) historical data ingester and query API, built with Rust. This project focuses on ingesting blocks, transactions, and event logs from an Ethereum node, storing them efficiently in PostgreSQL, and providing a queryable REST API. Core ingestion and storage for recent blocks is functional, and a foundational API with key endpoints is in place.
+A high-performance Ethereum Virtual Machine (EVM) historical data ingester and query API, built with Rust. This project focuses on ingesting blocks, transactions, and event logs from an Ethereum node, storing them efficiently in PostgreSQL, and providing a queryable REST API. Core ingestion/storage for recent blocks is functional. A V1 REST API with key lookup endpoints and robust log querying (including filtering and pagination) is now implemented.
 
 ## 🌟 Project Goals & Motivation
 
@@ -15,18 +15,22 @@ A high-performance Ethereum Virtual Machine (EVM) historical data ingester and q
   * [x] Fetch historical blocks from an Ethereum node.
   * [x] Extract transactions from blocks.
   * [x] Extract event logs from transaction receipts.
-  * *(Current implementation processes recent blocks; continuous/full historical sync is a future enhancement).*
+  * *(Current implementation processes recent blocks when run; continuous/full historical sync is a future enhancement).*
 * **Storage:**
   * [x] Store ingested data (blocks, transactions, logs) in a PostgreSQL database.
   * [x] Designed and implemented v1 database schema; further refinement planned.
 * **API (using Axum):**
   * [x] Basic REST API server setup.
-  * [x] `POST /logs` endpoint with basic filtering (block range, single address, topic0) using `sqlx::QueryBuilder`.
-  * [x] `GET /block/{block_number}` endpoint to fetch block data.
-  * [x] `GET /transaction/{transaction_hash}` endpoint to fetch transaction data.
-  * [ ] Advanced filtering for `/logs` (multiple addresses/topics, `blockHash` filter, block tags) pending.
-  * [ ] Standardized JSON error handling pending.
-  * [ ] Pagination for list responses pending.
+  * [x] Standardized JSON error handling implemented (`ApiError`).
+  * [x] `POST /logs` endpoint with:
+    * Filtering by block range (`fromBlock`, `toBlock`).
+    * Filtering by specific `blockHash` (overrides block range).
+    * Filtering by single contract `address`.
+    * Filtering by `topic0`, `topic1`, `topic2`, and `topic3` (exact match).
+    * Pagination (`page`, `pageSize`).
+  * [x] `GET /block/{identifier}` endpoint (accepts block number or hash).
+  * [x] `GET /transaction/{transaction_hash}` endpoint.
+  * [ ] Advanced filtering for `/logs` (multiple addresses, OR logic for topics, block tags) pending.
 * **Core:**
   * Built with Rust for performance and safety.
   * [x] Asynchronous processing using Tokio.
@@ -164,7 +168,7 @@ A high-performance Ethereum Virtual Machine (EVM) historical data ingester and q
             FOREIGN KEY(transaction_hash)
             REFERENCES transactions(tx_hash)
             ON DELETE CASCADE,
-        CONSTRAINT fk_block_number_logs -- Optional: Can also link directly to blocks
+        CONSTRAINT fk_block_number_logs 
             FOREIGN KEY(block_number)
             REFERENCES blocks(block_number)
             ON DELETE CASCADE
@@ -174,6 +178,10 @@ A high-performance Ethereum Virtual Machine (EVM) historical data ingester and q
     CREATE INDEX IF NOT EXISTS idx_logs_transaction_hash ON logs(transaction_hash);
     CREATE INDEX IF NOT EXISTS idx_logs_contract_address ON logs(contract_address);
     CREATE INDEX IF NOT EXISTS idx_logs_topic0 ON logs(topic0);
+    -- Add indexes for other topics if frequently filtered individually
+    CREATE INDEX IF NOT EXISTS idx_logs_topic1 ON logs(topic1);
+    CREATE INDEX IF NOT EXISTS idx_logs_topic2 ON logs(topic2);
+    CREATE INDEX IF NOT EXISTS idx_logs_topic3 ON logs(topic3);
     CREATE INDEX IF NOT EXISTS idx_logs_all_topics_gin ON logs USING GIN (all_topics);
     ```
 
@@ -193,31 +201,34 @@ A high-performance Ethereum Virtual Machine (EVM) historical data ingester and q
 
     This will start the API server (listening on `http://127.0.0.1:3000` by default). The data ingestion logic in `main.rs` is currently commented out to focus on API development. To populate the database initially:
     * You'll need to temporarily uncomment the ingestion loop in `src/main.rs` (the part that fetches blocks and calls the `db::insert_...` functions).
-    * Run `cargo run` to ingest some data.
-    * Then, comment out the ingestion loop again to run only the API server.
+    * Run `cargo run` to ingest some data (e.g., set `num_blocks_to_fetch` to 50-100).
+    * Then, comment out the ingestion loop again to run only the API server with the populated data.
     *(Future enhancements will involve making ingestion a separate command or background task.)*
 
 ## 🗺️ Project Status & Roadmap
 
-* **Current Status:**
-  * Core data ingestion pipeline implemented: successfully fetches and stores blocks, transactions, and event logs into a PostgreSQL database for recent blocks.
-  * REST API developed with `axum`, providing initial query capabilities:
-    * `POST /logs` with basic filtering (block range, single address, topic0) using `sqlx::QueryBuilder`.
-    * `GET /block/{block_number}`.
-    * `GET /transaction/{transaction_hash}`.
+* **Current Status (V1 API Achieved):**
+  * Core data ingestion pipeline implemented: successfully fetches and stores blocks, transactions, and event logs into a PostgreSQL database for a configurable number of recent blocks.
+  * REST API (V1) developed with `axum`, providing key query capabilities:
+    * Standardized JSON error handling (`ApiError`).
+    * `POST /logs` with filtering by block range, specific `blockHash`, single contract `address`, and exact matches for `topic0`, `topic1`, `topic2`, `topic3`. Includes pagination (`page`, `pageSize`).
+    * `GET /block/{identifier}` supporting lookup by block number or block hash.
+    * `GET /transaction/{transaction_hash}` for transaction details.
   * Codebase organized into modules for database interactions (`db.rs`), API handling (`api.rs`), and data models (`models.rs`, `api_models.rs`).
 
-* **Next Steps (Focus on API Enhancement):**
-    1. Implement standardized JSON error handling for the API.
-    2. Enhance `/logs` endpoint:
-        * Add filtering for `topic1`, `topic2`, `topic3`.
-        * Implement `blockHash` filter.
-    3. Enhance `/block/{identifier}` to accept block hash in addition to block number.
-    4. (Further Out)
-        * Implement pagination for API endpoints returning lists.
-        * Advanced topic filtering for `/logs` (arrays of topics, OR logic).
-        * Develop ingester for continuous operation (state management, robust error handling).
-        * Performance optimizations for historical data sync.
+* **Next Steps (Focus on Ingester Robustness & Continuous Operation):**
+    1. **Ingester State Management:** Implement logic to save and resume ingestion from the last successfully processed block.
+    2. **Continuous Ingestion Loop:** Modify the ingester to periodically poll for new blocks and process them.
+    3. **Robust Ingester Error Handling:** Implement retries and backoff strategies for RPC calls and database writes during ingestion.
+    4. **(Further API Enhancements - V1.1 / V2):**
+        * Advanced `getLogs` filtering (multiple addresses, OR logic for topics within a position, block tags like "latest").
+        * New utility endpoints (e.g., transactions by address, with pagination).
+        * Enhanced input validation for API parameters.
+    5. **(Longer Term / Ongoing):**
+        * Performance optimizations for historical data sync (e.g., concurrency, addressing N+1 for receipts).
+        * Database schema/type refinements (e.g., using `NUMERIC` for `U256` values, `TIMESTAMPTZ` for timestamps).
+        * API Documentation (e.g., OpenAPI/Swagger).
+        * Reorg handling for the ingester.
 
 ## 📜 License
 
