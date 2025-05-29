@@ -1,7 +1,7 @@
-mod models;
+mod api;
 mod api_models;
 mod db;
-mod api;
+mod models;
 
 use dotenvy::dotenv;
 use ethers::{
@@ -9,13 +9,11 @@ use ethers::{
     types::U64, // For Ethereum U64 type, typically used for block numbers
 };
 use eyre::Result;
-use std::env;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use std::env;
 
-use models::{MyBlock, MyTransaction, MyLog};
-
-
+use models::{MyBlock, MyLog, MyTransaction};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,23 +35,29 @@ async fn main() -> Result<()> {
         .await?;
     println!("Successfully connected to database.");
 
-    if let Err(e) = api::run_api_server(pool.clone()).await { // Call the version from the api module
+    if let Err(e) = api::run_api_server(pool.clone()).await {
+        // Call the version from the api module
         eprintln!("API server failed: {}", e);
         return Err(e);
-   }
+    }
 
     //Simple DB test query
     let test_query_result: (i32,) = sqlx::query_as("SELECT 1 AS test_value")
         .fetch_one(&pool)
         .await?;
-    println!("Database test query result (should be 1): {}", test_query_result.0);
+    println!(
+        "Database test query result (should be 1): {}",
+        test_query_result.0
+    );
 
     // Fetching and processing blockchain data
     let current_block_number = provider.get_block_number().await?;
     println!("\nCurrent Ethereum block number: {}", current_block_number);
 
-    let num_blocks_to_fetch = 1; // Number of recent blocks to fetch and process
-    let start_block_num_u64 = current_block_number.as_u64().saturating_sub(num_blocks_to_fetch -1);
+    let num_blocks_to_fetch = 51; // Number of recent blocks to fetch and process
+    let start_block_num_u64 = current_block_number
+        .as_u64()
+        .saturating_sub(num_blocks_to_fetch - 1);
 
     println!(
         "Fetching blocks from {} to {}",
@@ -84,12 +88,15 @@ async fn main() -> Result<()> {
                     base_fee_per_gas: ethers_block.base_fee_per_gas,
                 };
                 all_my_blocks.push(my_block.clone());
-                db::insert_block_data(&pool, &my_block).await?; 
+                db::insert_block_data(&pool, &my_block).await?;
 
                 for ethers_tx in ethers_block.transactions {
                     // Fetching receipts is N+1, can be slow for many transactions.
                     let receipt_option = provider.get_transaction_receipt(ethers_tx.hash).await?;
-                    let status = receipt_option.as_ref().and_then(|r| r.status).map(|s| s.as_u64());
+                    let status = receipt_option
+                        .as_ref()
+                        .and_then(|r| r.status)
+                        .map(|s| s.as_u64());
 
                     // Map to custom transaction struct
                     let my_tx = MyTransaction {
@@ -117,12 +124,18 @@ async fn main() -> Result<()> {
                             let my_log = MyLog {
                                 log_index: ethers_log.log_index,
                                 transaction_hash: ethers_log.transaction_hash.unwrap_or_default(),
-                                transaction_index: ethers_log.transaction_index.map(|idx| idx.as_u64()),
+                                transaction_index: ethers_log
+                                    .transaction_index
+                                    .map(|idx| idx.as_u64()),
                                 block_number: ethers_log.block_number.map_or(0, |bn| bn.as_u64()),
                                 block_hash: ethers_log.block_hash.unwrap_or_default(),
                                 address: ethers_log.address,
                                 data: ethers_log.data.to_string(),
-                                topics: ethers_log.topics.into_iter().map(|h| format!("{:#x}", h)).collect(),
+                                topics: ethers_log
+                                    .topics
+                                    .into_iter()
+                                    .map(|h| format!("{:#x}", h))
+                                    .collect(),
                             };
                             db::insert_log_data(&pool, &my_log).await?;
                             all_my_logs.push(my_log);
@@ -155,7 +168,10 @@ async fn main() -> Result<()> {
         println!("{:#?}", t);
     }
     if all_my_transactions.len() > 5 {
-        println!("... and {} more transactions.", all_my_transactions.len() - 5);
+        println!(
+            "... and {} more transactions.",
+            all_my_transactions.len() - 5
+        );
     }
 
     println!("\n--- Processed Logs (first few) ---");

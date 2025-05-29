@@ -1,19 +1,18 @@
 // src/models.rs
 
 use ethers::core::types::{Address, H256, U256, U64}; // Ensure U64 is imported
-use serde::{Serialize, Deserialize};
-
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MyLog {
-    pub log_index: Option<U256>,        // Log index within the block
+    pub log_index: Option<U256>, // Log index within the block
     pub transaction_hash: H256,
     pub transaction_index: Option<u64>, // u64 from MyTransaction or Option<U256>
     pub block_number: u64,
     pub block_hash: H256,
-    pub address: Address,               // Address of the contract that emitted the log
-    pub data: String,                   // Hex string of non-indexed log data
-    pub topics: Vec<String>,            // Vec of H256 topics, converted to hex strings
+    pub address: Address,    // Address of the contract that emitted the log
+    pub data: String,        // Hex string of non-indexed log data
+    pub topics: Vec<String>, // Vec of H256 topics, converted to hex strings
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

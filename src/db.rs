@@ -1,6 +1,6 @@
-use crate::models::{MyBlock, MyTransaction, MyLog};// Use `crate::models`
-use sqlx::PgPool;
+use crate::models::{MyBlock, MyLog, MyTransaction}; // Use `crate::models`
 use eyre::Result;
+use sqlx::PgPool;
 
 // Inserts block data into the 'blocks' table.
 pub async fn insert_block_data(pool: &PgPool, block: &MyBlock) -> Result<(), eyre::Report> {
@@ -11,8 +11,8 @@ pub async fn insert_block_data(pool: &PgPool, block: &MyBlock) -> Result<(), eyr
     // Prepare numeric and potentially large number types for SQL.
     // Timestamp is stored as Unix epoch seconds (BIGINT).
     let timestamp_val = block.timestamp.as_u64() as i64;
-    let gas_used_str = block.gas_used.to_string();       // U256 -> TEXT
-    let gas_limit_str = block.gas_limit.to_string();      // U256 -> TEXT
+    let gas_used_str = block.gas_used.to_string(); // U256 -> TEXT
+    let gas_limit_str = block.gas_limit.to_string(); // U256 -> TEXT
     let base_fee_per_gas_str = block.base_fee_per_gas.map(|val| val.to_string()); // Option<U256> -> Option<String>
 
     sqlx::query!(
@@ -40,7 +40,10 @@ pub async fn insert_block_data(pool: &PgPool, block: &MyBlock) -> Result<(), eyr
 }
 
 // Inserts transaction data into the 'transactions' table.
-pub async fn insert_transaction_data(pool: &PgPool, tx: &MyTransaction) -> Result<(), eyre::Report> {
+pub async fn insert_transaction_data(
+    pool: &PgPool,
+    tx: &MyTransaction,
+) -> Result<(), eyre::Report> {
     let tx_hash_str = format!("{:#x}", tx.tx_hash);
     let block_hash_str = format!("{:#x}", tx.block_hash); // Denormalized for convenience
     let from_address_str = format!("{:#x}", tx.from_address);
