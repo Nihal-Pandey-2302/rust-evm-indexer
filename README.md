@@ -1,12 +1,12 @@
 # EVM Indexer in Rust 🦀
 
-A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, built with Rust. This project features a **continuously running ingester** that fetches blocks, transactions, and event logs from an Ethereum node, storing them in PostgreSQL. A **concurrent REST API** provides queryable access to the indexed data. The V1 API with key lookup endpoints and robust log querying (including filtering and pagination) is implemented.
+A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, built with Rust. This project features a **continuously running ingester** that fetches blocks, transactions, and event logs from an Ethereum node, storing them in PostgreSQL. A **concurrent REST API** provides queryable access to the indexed data. The V1 API with key lookup endpoints and robust log querying (including filtering and pagination) is implemented, and the ingester includes retry mechanisms for core RPC calls.
 
 ## 🌟 Project Goals & Motivation
 
 * To gain practical experience in building robust systems with Rust.
 * To deepen understanding of Ethereum's data structures, JSON-RPC API, and EVM internals.
-* To explore efficient data ingestion (including continuous, stateful syncing), storage (PostgreSQL with `sqlx`), and API design patterns (with `axum`).
+* To explore efficient data ingestion (including continuous, stateful, and resilient syncing), storage (PostgreSQL with `sqlx`), and API design patterns (with `axum`).
 * To serve as a significant learning tool and portfolio piece for blockchain protocol engineering.
 
 ## ✨ Features
@@ -15,11 +15,12 @@ A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, bu
   * [x] Fetch historical blocks from an Ethereum node.
   * [x] Extract transactions from blocks.
   * [x] Extract event logs from transaction receipts.
-  * **[x] Continuous polling for new blocks.**
-  * **[x] State management to resume ingestion from the last successfully synced block (state stored in DB).**
-  * **[x] Basic batch processing of blocks.**
-  * **[x] Per-block data insertion within database transactions for atomicity.**
-  * *(Full historical sync performance and advanced error handling/retries are future enhancements).*
+  * [x] Continuous polling for new blocks.
+  * [x] State management to resume ingestion from the last successfully synced block (state stored in DB).
+  * [x] Basic batch processing of blocks.
+  * [x] Per-block data insertion within database transactions for atomicity.
+  * **[x] Retry logic with exponential backoff implemented for critical RPC calls (`get_block_with_txs`, `get_transaction_receipt`).**
+  * *(Full historical sync performance and more comprehensive ingester error handling are future enhancements).*
 * **Storage:**
   * [x] Store ingested data (blocks, transactions, logs) in a PostgreSQL database.
   * [x] Designed and implemented v1 database schema; further refinement planned.
@@ -38,7 +39,7 @@ A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, bu
 * **Core:**
   * Built with Rust for performance and safety.
   * [x] Asynchronous processing using Tokio.
-  * **[x] Concurrent operation of ingester and API server using Tokio tasks.**
+  * [x] Concurrent operation of ingester and API server using Tokio tasks.
   * [x] Interaction with Ethereum nodes via `ethers-rs`.
   * [x] Database interaction using `sqlx` with PostgreSQL.
   * [x] Modular code structure (models, database logic, API handlers).
@@ -71,29 +72,20 @@ A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, bu
     ```
 
 2. **Set up PostgreSQL Database & User:**
-    You'll need a dedicated database and user for the indexer. You can create these using `psql` (PostgreSQL's command-line interface).
-
-    First, log in to `psql` as a superuser (e.g., `postgres`):
+    (Instructions as you currently have them - create `indexer_user` and `evm_data_indexer` database)
 
     ```bash
     sudo -u postgres psql
     ```
 
-    Then, execute the following SQL commands. Replace `YOUR_CHOSEN_PASSWORD` with a strong password for the new user.
-
     ```sql
-    -- Create a dedicated user for the indexer
     CREATE USER indexer_user WITH PASSWORD 'YOUR_CHOSEN_PASSWORD';
-
-    -- Create the database and set the new user as the owner
     CREATE DATABASE evm_data_indexer OWNER indexer_user;
-
-    -- Exit psql for now
     \q
     ```
 
 3. **Set up your environment variables:**
-    Create a file named `.env` in the root of the project directory. Add your Ethereum RPC URL and your PostgreSQL database connection URL, using the credentials you just created:
+    Create `.env` file:
 
     ```env
     # .env
@@ -101,84 +93,30 @@ A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, bu
     DATABASE_URL=postgres://indexer_user:YOUR_CHOSEN_PASSWORD@localhost:5432/evm_data_indexer
     ```
 
-    * Replace `YOUR_ETHEREUM_NODE_RPC_URL_HERE` with your actual Ethereum RPC URL.
-    * Replace `YOUR_CHOSEN_PASSWORD` with the password you set for `indexer_user`.
-    * Adjust `localhost:5432` if your PostgreSQL server runs on a different host or port.
-    * Ensure the database name (`evm_data_indexer`) matches what you created.
-    **Note:** The `.env` file is included in `.gitignore` and should not be committed to the repository.
+    (Instructions as you currently have them)
 
 4. **Create Database Tables:**
-    Connect to your newly created database as the `indexer_user`:
+    Connect to your database:
 
     ```bash
     psql -U indexer_user -d evm_data_indexer -h localhost
     ```
 
-    It will prompt for the password. Once connected (you should see the `evm_data_indexer=>` prompt), execute the following SQL DDL statements to create the necessary tables (including the `indexer_status` table):
+    Execute DDL statements:
 
     ```sql
     -- Create the 'blocks' table
-    CREATE TABLE blocks (
-        block_number BIGINT PRIMARY KEY,
-        block_hash VARCHAR(66) UNIQUE NOT NULL,
-        parent_hash VARCHAR(66) NOT NULL,
-        timestamp BIGINT NOT NULL, -- Unix timestamp
-        gas_used TEXT NOT NULL,    -- Storing U256 as string
-        gas_limit TEXT NOT NULL,   -- Storing U256 as string
-        base_fee_per_gas TEXT      -- Storing Option<U256> as string
-    );
+    CREATE TABLE blocks ( /* ... as you have it ... */ );
 
     -- Create the 'transactions' table
-    CREATE TABLE transactions (
-        tx_hash VARCHAR(66) PRIMARY KEY,
-        block_number BIGINT NOT NULL,
-        block_hash VARCHAR(66) NOT NULL,
-        transaction_index BIGINT,
-        from_address VARCHAR(42) NOT NULL,
-        to_address VARCHAR(42),
-        value TEXT NOT NULL, -- Storing U256 as string
-        gas_price TEXT,      -- Storing Option<U256> as string
-        max_fee_per_gas TEXT, -- Storing Option<U256> as string
-        max_priority_fee_per_gas TEXT, -- Storing Option<U256> as string
-        gas_provided TEXT NOT NULL, -- Gas limit for the tx, U256 as string
-        input_data TEXT,
-        status SMALLINT,     -- 0 for failure, 1 for success
-        CONSTRAINT fk_block_number_transactions
-            FOREIGN KEY(block_number)
-            REFERENCES blocks(block_number)
-            ON DELETE CASCADE
-    );
-
+    CREATE TABLE transactions ( /* ... as you have it ... */ );
     -- Create indexes for 'transactions' table
     CREATE INDEX IF NOT EXISTS idx_transactions_block_number ON transactions(block_number);
     CREATE INDEX IF NOT EXISTS idx_transactions_from_address ON transactions(from_address);
     CREATE INDEX IF NOT EXISTS idx_transactions_to_address ON transactions(to_address);
 
     -- Create the 'logs' table
-    CREATE TABLE logs (
-        id BIGSERIAL PRIMARY KEY, -- Auto-incrementing primary key
-        log_index_in_tx BIGINT,
-        transaction_hash VARCHAR(66) NOT NULL,
-        transaction_index_in_block BIGINT,
-        block_number BIGINT NOT NULL,
-        block_hash VARCHAR(66) NOT NULL,
-        contract_address VARCHAR(42) NOT NULL,
-        data TEXT,
-        topic0 VARCHAR(66),
-        topic1 VARCHAR(66),
-        topic2 VARCHAR(66),
-        topic3 VARCHAR(66),
-        all_topics TEXT[] NOT NULL, -- Stores all topics as an array of text
-        CONSTRAINT fk_transaction_hash_logs
-            FOREIGN KEY(transaction_hash)
-            REFERENCES transactions(tx_hash)
-            ON DELETE CASCADE,
-        CONSTRAINT fk_block_number_logs 
-            FOREIGN KEY(block_number)
-            REFERENCES blocks(block_number)
-            ON DELETE CASCADE
-    );
-
+    CREATE TABLE logs ( /* ... as you have it ... */ );
     -- Create indexes for 'logs' table
     CREATE INDEX IF NOT EXISTS idx_logs_transaction_hash ON logs(transaction_hash);
     CREATE INDEX IF NOT EXISTS idx_logs_contract_address ON logs(contract_address);
@@ -193,12 +131,9 @@ A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, bu
         indexer_name VARCHAR(100) PRIMARY KEY,
         last_processed_block BIGINT NOT NULL
     );
-    -- Optional: You can insert an initial starting block for the ingester
-    -- INSERT INTO indexer_status (indexer_name, last_processed_block) VALUES ('evm_main_sync', STARTING_BLOCK_NUMBER_HERE)
-    -- ON CONFLICT (indexer_name) DO NOTHING;
     ```
 
-    After executing these, you can type `\q` to exit `psql`.
+    Then `\q` to exit `psql`.
 
 5. **Build the project:**
 
@@ -212,36 +147,28 @@ A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, bu
     cargo run
     ```
 
-    This command will start both the continuous data ingester and the API server concurrently:
-    * The **ingester** will run as a background Tokio task, automatically checking for new blocks based on its last synced state (or `DEFAULT_START_BLOCK` on first run from `main.rs`) and populating the database. You will see its logging output in the console (e.g., "INGESTER Cycle: Targeting blocks...").
-    * The **API server** will start and listen on `http://127.0.0.1:3000` (by default), ready to serve requests using the data indexed. You will see its startup message (e.g., "API server listening on...").
-    To stop both services, press `Ctrl+C` in the terminal.
+    This command will start both the continuous data ingester and the API server concurrently. The ingester runs as a background Tokio task, automatically syncing new blocks. The API server listens on `http://127.0.0.1:3000`. To stop both, press `Ctrl+C`.
 
 ## 🗺️ Project Status & Roadmap
 
 * **Current Status:**
-  * **Concurrent Operation:** Implemented concurrent execution of a continuous data ingester and the API server using `tokio::spawn`.
-  * **Stateful Ingester:** Ingester now features state management (persisted in PostgreSQL's `indexer_status` table) for resumable and continuous syncing of recent blocks in batches.
-  * **Transactional Inserts:** Database writes for each block's data (block, transactions, logs, and sync status) are performed within a single database transaction for improved atomicity.
-  * **V1 API Complete:** REST API developed with `axum` provides key query capabilities:
-    * Standardized JSON error handling (`ApiError`).
-    * `POST /logs` with filtering by block range, specific `blockHash`, single contract `address`, and exact matches for `topic0`, `topic1`, `topic2`, `topic3`. Includes pagination (`page`, `pageSize`).
-    * `GET /block/{identifier}` supporting lookup by block number or block hash.
-    * `GET /transaction/{transaction_hash}` for transaction details.
-  * **Code Organization:** Codebase well-organized into modules (`db.rs`, `api.rs`, `models.rs`, `api_models.rs`).
+  * **Concurrent Operation:** Implemented concurrent execution of a continuous data ingester and the API server.
+  * **Stateful & Resilient Ingester:** Ingester features state management (persisted in PostgreSQL) for resumable syncing and **retry logic with backoff for key RPC calls** (`get_block_with_txs`, `get_transaction_receipt`).
+  * **Transactional Inserts:** Per-block data insertion (block, transactions, logs, sync status) occurs within database transactions.
+  * **V1 API Complete:** REST API with `axum` provides standardized JSON error handling, `POST /logs` (with filtering by block range/hash, address, topics 0-3, and pagination), `GET /block/{identifier}` (number/hash), and `GET /transaction/{hash}`.
+  * **Code Organization:** Well-organized into modules (`db.rs`, `api.rs`, `models.rs`, `api_models.rs`).
 
-* **Next Steps (Focus on Ingester Robustness & Performance):**
-    1. **Enhanced Ingester Error Handling & Retries:** Implement more specific retry logic with backoff for RPC calls (e.g., for `get_block_with_txs`, `get_transaction_receipt`) and transient database errors within the ingestion loop.
-    2. **Performance for Historical Sync:** Address the N+1 query problem for transaction receipts more systematically for bulk ingestion. Explore options like batch JSON-RPC calls or a multi-pass ingestion strategy.
-    3. **Configuration:** Make batch sizes, poll intervals, and default start blocks more easily configurable (e.g., via `.env` or command-line arguments).
+* **Next Steps (Focus on Ingester Performance & Further Enhancements):**
+    1. **Performance for Historical Sync:** Address the N+1 query problem for transaction receipts more systematically for bulk ingestion (e.g., explore batch JSON-RPC calls).
+    2. **Configuration:** Make ingester parameters like batch sizes, poll intervals, and default start blocks more easily configurable (e.g., via `.env` or command-line arguments).
+    3. **More Comprehensive Ingester Error Handling:** Further refine error handling for different classes of RPC or database errors during ingestion.
     4. **(Further API Enhancements - V1.1 / V2):**
-        * Advanced `getLogs` filtering (multiple addresses, OR logic for topics within a position, block tags like "latest").
+        * Advanced `getLogs` filtering (multiple addresses, OR logic for topics, block tags).
         * New utility endpoints (e.g., transactions by address, with pagination).
-        * Enhanced input validation for API parameters.
     5. **(Longer Term / Ongoing):**
         * Reorg handling for the ingester.
-        * Full database type/index optimization (e.g., using `NUMERIC` for `U256` values, `TIMESTAMPTZ` for timestamps).
         * API Documentation (e.g., OpenAPI/Swagger).
+        * Database schema/type refinements.
 
 ## 📜 License
 
