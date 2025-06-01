@@ -27,16 +27,14 @@ const MAX_BLOCK_FETCH_RETRIES: u32 = 3;
 const BASE_BLOCK_FETCH_BACKOFF_SECONDS: u64 = 2;
 
 // --- New function for the continuous ingestion logic ---
-async fn run_continuous_ingester(provider: Provider<Http>, pool: PgPool) -> Result<()> {
-    // Assuming eyre::Result
+async fn run_continuous_ingester(provider: Provider<Http>, pool: PgPool) -> Result<()> { // Using eyre::Result
     println!("\n--- Continuous Ingester Task Started ---");
     println!(
         "Polling for new blocks every {} seconds. Processing up to {} blocks per batch.",
         POLL_INTERVAL_SECONDS, BLOCKS_PER_BATCH
     );
 
-    loop {
-        // Outer loop for continuous polling
+    loop { // Outer loop for continuous polling
         let last_synced_block_opt = match db::get_last_synced_block(&pool).await {
             Ok(val) => val,
             Err(e) => {
@@ -45,11 +43,9 @@ async fn run_continuous_ingester(provider: Provider<Http>, pool: PgPool) -> Resu
                 continue;
             }
         };
-
+        
         let start_block_to_fetch = match last_synced_block_opt {
-            // Removed 'mut' as it's not reassigned in this scope
             Some(last_block) => {
-                // println!("INGESTER: Resuming: Last synced block in DB was {}. Will fetch from {}.", last_block, last_block + 1);
                 last_block + 1
             }
             None => {
@@ -69,20 +65,19 @@ async fn run_continuous_ingester(provider: Provider<Http>, pool: PgPool) -> Resu
                 continue;
             }
         };
-
+        
         if start_block_to_fetch > current_chain_head {
-            // println!("INGESTER: Up to date with chain head (Next to fetch: {}, Head: {}). Waiting for new blocks...", start_block_to_fetch, current_chain_head);
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECONDS)).await;
-            continue;
+            continue; 
         }
-
+        
         let end_block_to_fetch =
             (start_block_to_fetch + BLOCKS_PER_BATCH - 1).min(current_chain_head);
-
+        
         if start_block_to_fetch > end_block_to_fetch {
-            println!("INGESTER: No new blocks in the target range to form a full batch (Start: {}, Head: {}). Waiting...", start_block_to_fetch, current_chain_head);
-            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECONDS)).await;
-            continue;
+             println!("INGESTER: No new blocks in the target range to form a full batch (Start: {}, Head: {}). Waiting...", start_block_to_fetch, current_chain_head);
+             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECONDS)).await;
+             continue;
         }
 
         println!(
@@ -96,22 +91,20 @@ async fn run_continuous_ingester(provider: Provider<Http>, pool: PgPool) -> Resu
 
         for block_num_u64 in start_block_to_fetch..=end_block_to_fetch {
             let block_num_for_rpc = U64::from(block_num_u64);
-
-            let block_processing_result = async { // Async block for processing one block
+            
+            let block_processing_result = async { 
                 let mut db_tx = pool.begin().await.map_err(|e| eyre::eyre!("DB: Failed to begin transaction for block {}: {}", block_num_u64, e))?;
                 
-                // --- Retry logic for get_block_with_txs ---
                 let mut ethers_block_option_from_rpc: Option<ethers::types::Block<ethers::types::Transaction>> = None;
                 for attempt in 1..=MAX_BLOCK_FETCH_RETRIES {
                     match provider.get_block_with_txs(block_num_for_rpc).await {
                         Ok(Some(b)) => {
                             ethers_block_option_from_rpc = Some(b);
-                            // println!("INGESTER ETH: Successfully fetched block #{} data on attempt {}.", block_num_u64, attempt);
                             break; 
                         }
                         Ok(None) => {
                             eprintln!("INGESTER ETH: Block #{} not found (Ok(None)) by provider on attempt {}. This block will be skipped.", block_num_u64, attempt);
-                            ethers_block_option_from_rpc = None; // Explicitly set to None
+                            ethers_block_option_from_rpc = None;
                             break; 
                         }
                         Err(e) => {
@@ -120,10 +113,8 @@ async fn run_continuous_ingester(provider: Provider<Http>, pool: PgPool) -> Resu
                                 attempt, MAX_BLOCK_FETCH_RETRIES, block_num_u64, e
                             );
                             if attempt == MAX_BLOCK_FETCH_RETRIES {
-                                // After all retries, this error will propagate up, causing db_tx to rollback
-                                // and the outer batch loop to break. The ingester will retry this block in the next polling cycle.
                                 return Err(eyre::eyre!( 
-                                    "Failed to fetch block data for #{} after {} attempts: {:?}", // Added original error for context
+                                    "Failed to fetch block data for #{} after {} attempts: {:?}",
                                     block_num_u64, MAX_BLOCK_FETCH_RETRIES, e
                                 ));
                             }
@@ -134,20 +125,13 @@ async fn run_continuous_ingester(provider: Provider<Http>, pool: PgPool) -> Resu
                     }
                 }
 
-                // Proceed only if block data was successfully fetched
                 let ethers_block = match ethers_block_option_from_rpc {
                     Some(b) => b,
                     None => {
-                        // Block was not found (Ok(None)) even after potential retries for an error case that then resolved to Ok(None),
-                        // or Ok(None) was returned directly.
-                        // We commit the (empty) transaction because no DB operations were done for this block.
-                        // We don't want to mark this non-existent block as "synced" in indexer_status.
-                        // The outer loop will proceed to the next block number.
                         db_tx.commit().await.map_err(|e| eyre::eyre!("DB: Commit after skipping block {} (not found by provider) failed: {}", block_num_u64, e))?;
-                        return Ok(false); // Indicate block was skipped as it wasn't found
+                        return Ok(false); 
                     }
                 };
-                // --- End of retry logic for get_block_with_txs ---
 
                 let my_block = MyBlock { 
                     block_number: ethers_block.number.unwrap_or_default(),
@@ -161,7 +145,6 @@ async fn run_continuous_ingester(provider: Provider<Http>, pool: PgPool) -> Resu
                 db::insert_block_data(&mut db_tx, &my_block).await.map_err(|e| eyre::eyre!("DB: Insert block {} failed: {}", my_block.block_number, e))?;
 
                 for ethers_tx in ethers_block.transactions {
-                    // --- Retry logic for get_transaction_receipt (already implemented by you) ---
                     let mut receipt_option_for_tx: Option<ethers::types::TransactionReceipt> = None;
                     for attempt in 1..=MAX_RECEIPT_RETRIES {
                         match provider.get_transaction_receipt(ethers_tx.hash).await {
@@ -183,7 +166,6 @@ async fn run_continuous_ingester(provider: Provider<Http>, pool: PgPool) -> Resu
                             }
                         }
                     }
-                    // --- End of retry logic for get_transaction_receipt ---
 
                     let status = receipt_option_for_tx.as_ref().and_then(|r| r.status).map(|s| s.as_u64());
                     let my_tx = MyTransaction { 
@@ -213,44 +195,43 @@ async fn run_continuous_ingester(provider: Provider<Http>, pool: PgPool) -> Resu
                                 block_hash: ethers_log.block_hash.unwrap_or_default(),
                                 address: ethers_log.address,
                                 data: ethers_log.data.to_string(),
-                                topics: ethers_log.topics.iter().map(|h| format!("{:#x}", h)).collect(), // Use iter() for Vec<H256>
+                                topics: ethers_log.topics.iter().map(|h| format!("{:#x}", h)).collect(),
                              };
                             db::insert_log_data(&mut db_tx, &my_log).await.map_err(|e| eyre::eyre!("DB: Insert log for tx {:?} failed: {}", my_tx.tx_hash, e))?;
                         }
                     }
-                } // End of transactions loop
+                } 
 
                 db::set_last_synced_block(&mut db_tx, block_num_u64).await.map_err(|e| eyre::eyre!("DB: Set last_synced_block for {} failed: {}", block_num_u64, e))?;
                 db_tx.commit().await.map_err(|e| eyre::eyre!("DB: Commit for block {} failed: {}", block_num_u64, e))?;
                 
-                println!("INGESTER: Successfully committed and synced block #{}", block_num_u64);
+                // println!("INGESTER: Successfully committed and synced block #{}", block_num_u64); // More concise: use print!(".")
                 Ok(true) 
             }.await;
 
             match block_processing_result {
-                Ok(true) => {
+                Ok(true) => { 
                     latest_block_successfully_synced_this_cycle = block_num_u64;
                     blocks_processed_this_cycle += 1;
-                    print!(".");
-                    std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
+                    print!("."); 
+                    std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default(); 
                 }
-                Ok(false) => {
+                Ok(false) => { 
                     println!("\nINGESTER: Skipped processing for block #{} as it was not found by provider or deemed skippable.", block_num_u64);
                 }
-                Err(e) => {
+                Err(e) => { 
                     eprintln!("\nINGESTER: Failed to process block #{}: {}. Transaction rolled back. Will retry batch in next cycle.", block_num_u64, e);
-                    break;
+                    break; 
                 }
             }
             if block_processing_result.is_ok() {
-                // Only sleep if the block processing itself didn't break the batch loop.
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        }
+        } 
 
         if blocks_processed_this_cycle > 0 {
             println!("\nINGESTER: Finished processing batch. {} blocks processed. Last successfully synced block in DB now: {}", blocks_processed_this_cycle, latest_block_successfully_synced_this_cycle);
-        } else if start_block_to_fetch <= end_block_to_fetch {
+        } else if start_block_to_fetch <= end_block_to_fetch { 
             println!("\nINGESTER: No blocks were successfully processed in this cycle (Target: {} to {}).", start_block_to_fetch, end_block_to_fetch);
         }
 
@@ -259,7 +240,7 @@ async fn run_continuous_ingester(provider: Provider<Http>, pool: PgPool) -> Resu
             POLL_INTERVAL_SECONDS
         );
         tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECONDS)).await;
-    }
+    } 
 }
 
 #[tokio::main]
