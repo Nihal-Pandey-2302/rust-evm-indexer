@@ -87,7 +87,7 @@ Once the server is running, you can access the live, interactive Swagger UI docu
 
 You can explore all available endpoints, see their request/response models, and execute API calls directly from the documentation page.
 
-![Swagger UI Preview](./assets/Swagger UI.png)
+![Swagger UI Preview](https://github.com/Nihal-Pandey-2302/rust-evm-indexer/blob/main/assets/Swagger%20UI.png)
 
 ## 🗺️ Project Status & Roadmap
 
