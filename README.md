@@ -87,7 +87,7 @@ Once the server is running, you can access the live, interactive Swagger UI docu
 
 You can explore all available endpoints, see their request/response models, and execute API calls directly from the documentation page.
 
-![Swagger UI Preview](https://placehold.co/800x450/2d3748/ffffff?text=Swagger+UI+for+EVM+Indexer)
+![Swagger UI Preview](./assets/Swagger UI.png)
 
 ## 🗺️ Project Status & Roadmap
 
