@@ -3,6 +3,9 @@
         "BIGSERIAL",
         "dotenv",
         "dotenvy",
+        "INGESTER",
+        "Reqwest",
+        "serde",
         "sqlx"
     ]
 }

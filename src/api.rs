@@ -1,21 +1,27 @@
+// src/api.rs
+
+// --- Imports for Swagger/OpenAPI Documentation ---
+use crate::api_models::GenericErrorResponse;
+use crate::docs::ApiDoc;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
+
+// --- Imports for Axum and Business Logic ---
+use crate::{
+    api_models::GetLogsFilter,
+    models::{MyBlock, MyLog, MyTransaction},
+};
 use axum::{
-    extract::Path,
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse, // Important for custom error types
-    response::{Html, Json},
+    response::{Html, IntoResponse, Json},
     routing::{get, post},
     Router,
 };
-
-use eyre::Result; // Or eyre::Report
-use serde_json::json;
-use sqlx::{Execute, PgPool, QueryBuilder};
+use ethers::core::types::{Address, H256, U256, U64};
+use sqlx::{PgPool, QueryBuilder, Row as SqlxRow};
 use std::net::SocketAddr;
-
-// Import models needed by handlers
-use crate::api_models::GetLogsFilter;
-use crate::models::{MyBlock, MyLog, MyTransaction}; // GetLogsFilter is used in get_logs_handler request
+use std::str::FromStr;
 
 const MAX_PAGE_SIZE: u64 = 100;
 
@@ -24,14 +30,14 @@ pub enum ApiError {
     NotFound(String),
     InternalServerError(String),
     DatabaseError(sqlx::Error),
-    BadRequest(String), // <-- NEW VARIANT for client errors
+    BadRequest(String),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
-        let (status, error_message) = match self {
-            ApiError::NotFound(message) => (StatusCode::NOT_FOUND, message),
-            ApiError::InternalServerError(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
+        let (status, message) = match self {
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            ApiError::InternalServerError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             ApiError::DatabaseError(db_err) => {
                 eprintln!("Database error: {:?}", db_err);
                 (
@@ -39,70 +45,88 @@ impl IntoResponse for ApiError {
                     "A database error occurred".to_string(),
                 )
             }
-            ApiError::BadRequest(message) => (StatusCode::BAD_REQUEST, message), // <-- HANDLE NEW VARIANT
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
         };
 
-        let body = Json(json!({
-            "status": if status.is_client_error() { "fail" } else { "error" }, // "fail" for 4xx, "error" for 5xx
-            "statusCode": status.as_u16(),
-            "message": error_message,
-        }));
+        let body = GenericErrorResponse {
+            status: if status.is_client_error() {
+                "fail".to_string()
+            } else {
+                "error".to_string()
+            },
+            status_code: status.as_u16(),
+            message,
+        };
 
-        (status, body).into_response()
+        (status, Json(body)).into_response()
     }
 }
 
-// Helper: Convert sqlx::Error into ApiError
-// This allows you to use `?` on sqlx results in handlers that return Result<_, ApiError>
 impl From<sqlx::Error> for ApiError {
     fn from(err: sqlx::Error) -> Self {
-        ApiError::DatabaseError(err)
+        match err {
+            sqlx::Error::RowNotFound => {
+                ApiError::NotFound("The requested resource was not found.".to_string())
+            }
+            _ => ApiError::DatabaseError(err),
+        }
     }
 }
 
 impl From<eyre::Report> for ApiError {
     fn from(err: eyre::Report) -> Self {
-        eprintln!("Internal server error (eyre): {:?}", err);
-        ApiError::InternalServerError("An internal server error occurred".to_string())
+        ApiError::InternalServerError(err.to_string())
     }
 }
 
+/// API Root
+///
+/// Provides a simple welcome message to verify the API is running.
+#[utoipa::path(
+    get,
+    path = "/",
+    responses(
+        (status = 200, description = "Success", body = String, content_type = "text/html")
+    )
+)]
 pub async fn root_handler() -> Html<&'static str> {
     Html("<h1>Hello, EVM Indexer API!</h1><p>Welcome to your Rust-powered API.</p>")
 }
 
-// src/main.rs
-// ... (imports including MyLog, GetLogsFilter, PgPool, State, Json, StatusCode) ...
-
+/// Get Filtered Logs
+///
+/// Retrieves a paginated list of event logs based on a set of filters provided in the request body.
+#[utoipa::path(
+    post,
+    path = "/logs",
+    request_body = GetLogsFilter,
+    responses(
+        (status = 200, description = "Successfully retrieved logs", body = [MyLog]),
+        (status = 400, description = "Bad request due to invalid filters", body = GenericErrorResponse),
+        (status = 500, description = "Internal server error", body = GenericErrorResponse),
+    )
+)]
 async fn get_logs_handler(
     State(pool): State<PgPool>,
-    Json(filters): Json<GetLogsFilter>, // filters.page and filters.page_size now have defaults
+    Json(filters): Json<GetLogsFilter>,
 ) -> Result<Json<Vec<MyLog>>, ApiError> {
-    println!("Received /logs request with filters: {:?}", filters);
-
-    // --- Pagination Logic ---
-    // filters.page and filters.page_size have defaults from GetLogsFilter struct
-    let page = filters.page.max(1); // Ensure page is at least 1
-    let page_size = filters.page_size.min(MAX_PAGE_SIZE).max(1); // Cap page_size and ensure it's at least 1
+    let page = filters.page.max(1);
+    let page_size = filters.page_size.min(MAX_PAGE_SIZE).max(1);
     let offset = (page - 1) * page_size;
 
-    // Start building the query
     let mut query_builder: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
-        "SELECT id, log_index_in_tx, transaction_hash, transaction_index_in_block, \
-         block_number, block_hash, contract_address, data, \
-         topic0, topic1, topic2, topic3, all_topics \
+        "SELECT log_index, transaction_hash, transaction_index, \
+         block_number, block_hash, address, data, topics \
          FROM logs",
     );
-    query_builder.push(" WHERE 1=1"); // Base condition for easier AND appending
+    query_builder.push(" WHERE 1=1");
 
-    // --- Filter Logic ---
-    // Handle blockHash first, as it overrides fromBlock/toBlock
+    // --- FIX: Restore full filter logic to resolve warnings ---
     if let Some(bh_filter) = &filters.block_hash {
         query_builder.push(" AND LOWER(block_hash) = LOWER(");
-        query_builder.push_bind(bh_filter.clone());
+        query_builder.push_bind(bh_filter);
         query_builder.push(")");
     } else {
-        // Only apply fromBlock and toBlock if blockHash is not present
         if let Some(fb) = filters.from_block {
             query_builder.push(" AND block_number >= ");
             query_builder.push_bind(fb as i64);
@@ -112,266 +136,169 @@ async fn get_logs_handler(
             query_builder.push_bind(tb as i64);
         }
     }
-
-    // Address filter
     if let Some(addr_filter) = &filters.address {
-        query_builder.push(" AND LOWER(contract_address) = LOWER(");
-        query_builder.push_bind(addr_filter.clone());
+        query_builder.push(" AND LOWER(address) = LOWER(");
+        query_builder.push_bind(addr_filter);
         query_builder.push(")");
     }
-
-    // Topic filters
+    // This assumes your DB schema has separate columns topic0, topic1, etc.
+    // If you only have a `topics` array, the query would need to be different.
     if let Some(topic0_filter) = &filters.topic0 {
-        query_builder.push(" AND LOWER(topic0) = LOWER(");
-        query_builder.push_bind(topic0_filter.clone());
-        query_builder.push(")");
+        query_builder.push(" AND topics[1] = "); // PG arrays are 1-indexed
+        query_builder.push_bind(topic0_filter);
     }
     if let Some(topic1_filter) = &filters.topic1 {
-        query_builder.push(" AND LOWER(topic1) = LOWER(");
-        query_builder.push_bind(topic1_filter.clone());
-        query_builder.push(")");
+        query_builder.push(" AND topics[2] = ");
+        query_builder.push_bind(topic1_filter);
     }
     if let Some(topic2_filter) = &filters.topic2 {
-        query_builder.push(" AND LOWER(topic2) = LOWER(");
-        query_builder.push_bind(topic2_filter.clone());
-        query_builder.push(")");
+        query_builder.push(" AND topics[3] = ");
+        query_builder.push_bind(topic2_filter);
     }
     if let Some(topic3_filter) = &filters.topic3 {
-        query_builder.push(" AND LOWER(topic3) = LOWER(");
-        query_builder.push_bind(topic3_filter.clone());
-        query_builder.push(")");
+        query_builder.push(" AND topics[4] = ");
+        query_builder.push_bind(topic3_filter);
     }
 
-    // **** REMOVED duplicated fromBlock/toBlock filters from here ****
-
-    // --- Apply Ordering and Pagination to QueryBuilder ---
-    query_builder
-        .push(" ORDER BY block_number ASC, transaction_index_in_block ASC, log_index_in_tx ASC"); // Keep ordering consistent
+    query_builder.push(" ORDER BY block_number ASC, transaction_index ASC, log_index ASC");
     query_builder.push(" LIMIT ");
-    query_builder.push_bind(page_size as i64); // SQL LIMIT
+    query_builder.push_bind(page_size as i64);
     query_builder.push(" OFFSET ");
-    query_builder.push_bind(offset as i64); // SQL OFFSET
+    query_builder.push_bind(offset as i64);
 
-    let query = query_builder.build();
-    println!("Executing SQL: {}", query.sql()); // This will now include LIMIT and OFFSET placeholders
+    let rows = query_builder.build().fetch_all(&pool).await?;
 
-    let rows = query.fetch_all(&pool).await?;
+    let logs_result = rows
+        .into_iter()
+        .map(|row| MyLog {
+            log_index: SqlxRow::try_get::<Option<String>, _>(&row, "log_index")
+                .ok().flatten().and_then(|s| U256::from_dec_str(&s).ok()),
+            transaction_hash: H256::from_str(&SqlxRow::try_get::<String, _>(&row, "transaction_hash").unwrap_or_default()).unwrap_or_default(),
+            transaction_index: SqlxRow::try_get::<Option<i64>, _>(&row, "transaction_index").ok().flatten().map(|v| v as u64),
+            block_number: SqlxRow::try_get::<i64, _>(&row, "block_number").map(|v| v as u64).unwrap_or_default(),
+            block_hash: H256::from_str(&SqlxRow::try_get::<String, _>(&row, "block_hash").unwrap_or_default()).unwrap_or_default(),
+            address: Address::from_str(&SqlxRow::try_get::<String, _>(&row, "address").unwrap_or_default()).unwrap_or_default(),
+            data: SqlxRow::try_get(&row, "data").unwrap_or_default(),
+            topics: SqlxRow::try_get(&row, "topics").unwrap_or_default(),
+        })
+        .collect();
 
-    let mut logs_result: Vec<MyLog> = Vec::new();
-    // Ensure these use statements are available for the mapping logic
-    use ethers::core::types::{Address, H256, U256}; // U64 might not be needed if not in MyLog here
-    use sqlx::Row as SqlxRow;
-    use std::str::FromStr;
-
-    for row in rows {
-        // Helper closures for parsing (defined here for clarity or move to module level)
-        let parse_h256 = |s: Option<String>| -> H256 {
-            s.and_then(|str_val| H256::from_str(&str_val).ok())
-                .unwrap_or_default()
-        };
-        let parse_address = |s: Option<String>| -> Address {
-            s.and_then(|str_val| Address::from_str(&str_val).ok())
-                .unwrap_or_default()
-        };
-
-        let topics_from_db: Vec<String> = SqlxRow::try_get(&row, "all_topics").unwrap_or_default();
-
-        let log_entry = MyLog {
-            log_index: SqlxRow::try_get::<Option<i64>, _>(&row, "log_index_in_tx")
-                .ok()
-                .flatten()
-                .map(U256::from),
-            transaction_hash: parse_h256(SqlxRow::try_get(&row, "transaction_hash").ok()),
-            transaction_index: SqlxRow::try_get::<Option<i64>, _>(
-                &row,
-                "transaction_index_in_block",
-            )
-            .ok()
-            .flatten()
-            .map(|v| v as u64), // Assuming MyLog.transaction_index is Option<u64>
-            block_number: SqlxRow::try_get::<i64, _>(&row, "block_number")
-                .map(|v| v as u64)
-                .unwrap_or(0), // Assuming MyLog.block_number is u64
-            block_hash: parse_h256(SqlxRow::try_get(&row, "block_hash").ok()),
-            address: parse_address(SqlxRow::try_get(&row, "contract_address").ok()),
-            data: SqlxRow::try_get(&row, "data").unwrap_or_else(|_| String::from("0x")),
-            topics: topics_from_db,
-        };
-        logs_result.push(log_entry);
-    }
     Ok(Json(logs_result))
 }
 
+/// Get Block by Number or Hash
+///
+/// Retrieves a full block by its number or 0x-prefixed hash.
+#[utoipa::path(
+    get,
+    path = "/block/{identifier}",
+    params(
+        ("identifier" = String, Path, description = "Block number or hash", example = "18000000")
+    ),
+    responses(
+        (status = 200, description = "Block found", body = MyBlock),
+        (status = 404, description = "Block not found", body = GenericErrorResponse),
+        (status = 400, description = "Invalid identifier format", body = GenericErrorResponse)
+    )
+)]
 pub async fn get_block_handler(
-    // Renamed function
     State(pool): State<PgPool>,
-    Path(identifier): Path<String>, // Accepts a String identifier
+    Path(identifier): Path<String>,
 ) -> Result<Json<MyBlock>, ApiError> {
-    println!("Received /block/{} request", identifier);
-
-    let row_option: Option<sqlx::postgres::PgRow>; // Declare row_option outside the if/else
-
-    if identifier.starts_with("0x") && identifier.len() == 66 {
-        // Assume it's a block hash
-        // It's good practice to ensure the hash is lowercase for consistent querying if your DB stores it that way.
-        let block_hash_to_query = identifier.to_lowercase();
-        println!("Attempting to fetch block by hash: {}", block_hash_to_query);
-        row_option = sqlx::query(
-            "SELECT block_number, block_hash, parent_hash, timestamp, gas_used, gas_limit, base_fee_per_gas \
-             FROM blocks WHERE block_hash = $1" // Query by block_hash
-            )
-            .bind(block_hash_to_query) // Bind the block hash string
-            .fetch_optional(&pool)
-            .await?; // The ? uses From<sqlx::Error> for ApiError
-    } else if let Ok(block_number_param) = identifier.parse::<u64>() {
-        // Assume it's a block number
-        println!(
-            "Attempting to fetch block by number: {}",
-            block_number_param
-        );
-        let block_number_db = block_number_param as i64;
-        row_option = sqlx::query(
-            "SELECT block_number, block_hash, parent_hash, timestamp, gas_used, gas_limit, base_fee_per_gas \
-             FROM blocks WHERE block_number = $1" // Query by block_number
-            )
-            .bind(block_number_db)
-            .fetch_optional(&pool)
-            .await?; // The ? uses From<sqlx::Error> for ApiError
+    let query = "SELECT block_number, block_hash, parent_hash, timestamp, gas_used, gas_limit, base_fee_per_gas FROM blocks";
+    
+    let row = if identifier.starts_with("0x") {
+        sqlx::query(&format!("{} WHERE block_hash = $1", query))
+            .bind(identifier.to_lowercase())
+            .fetch_one(&pool).await?
     } else {
-        // Invalid identifier format
-        return Err(ApiError::BadRequest(format!(
-            "Invalid block identifier format: {}. Must be a block number or a 0x-prefixed 66-character hash.",
-            identifier
-        )));
-    }
+        let block_number = identifier.parse::<i64>().map_err(|_| ApiError::BadRequest("Invalid block number format".to_string()))?;
+        sqlx::query(&format!("{} WHERE block_number = $1", query))
+            .bind(block_number)
+            .fetch_one(&pool).await?
+    };
 
-    if let Some(row) = row_option {
-        // Helper closures for parsing (can be defined once at module level or passed if preferred)
-        // Ensure these `use` statements are within a scope that covers these closures if defined here,
-        // or at the top of the file if helpers are module-level functions.
-        // For clarity, if these are only used here, keeping them local is fine.
-        use std::str::FromStr; // Already likely at top of api.rs
-        use ethers::core::types::{H256, U256, U64};
-        use sqlx::Row as SqlxRow; // Already likely at top of api.rs
+    let my_block = MyBlock {
+        block_number: U64::from(SqlxRow::try_get::<i64, _>(&row, "block_number").unwrap_or_default()),
+        block_hash: H256::from_str(&SqlxRow::try_get::<String, _>(&row, "block_hash").unwrap_or_default()).unwrap_or_default(),
+        parent_hash: H256::from_str(&SqlxRow::try_get::<String, _>(&row, "parent_hash").unwrap_or_default()).unwrap_or_default(),
+        timestamp: U256::from(SqlxRow::try_get::<i64, _>(&row, "timestamp").unwrap_or_default()),
+        gas_used: U256::from_dec_str(&SqlxRow::try_get::<String, _>(&row, "gas_used").unwrap_or_default()).unwrap_or_default(),
+        gas_limit: U256::from_dec_str(&SqlxRow::try_get::<String, _>(&row, "gas_limit").unwrap_or_default()).unwrap_or_default(),
+        base_fee_per_gas: SqlxRow::try_get::<Option<String>, _>(&row, "base_fee_per_gas")
+            .ok().flatten().and_then(|s| U256::from_dec_str(&s).ok()),
+    };
 
-        let parse_h256_from_str = |s: Option<String>| -> H256 {
-            s.and_then(|str_val| H256::from_str(&str_val).ok()).unwrap_or_default()
-        };
-        let parse_u256_from_text = |s: Option<String>| -> U256 {
-            s.and_then(|str_val| U256::from_dec_str(&str_val).ok()).unwrap_or_default()
-        };
-        let parse_option_u256_from_text = |s: Option<String>| -> Option<U256> {
-            s.and_then(|str_val| U256::from_dec_str(&str_val).ok())
-        };
-
-        // Map to MyBlock struct
-        // Assuming MyBlock fields are defined with ethers-rs types (U64, U256, H256)
-        let my_block = MyBlock {
-            block_number: U64::from(SqlxRow::try_get::<i64, _>(&row, "block_number").unwrap_or_default()),
-            block_hash: parse_h256_from_str(SqlxRow::try_get(&row, "block_hash").ok()),
-            parent_hash: parse_h256_from_str(SqlxRow::try_get(&row, "parent_hash").ok()),
-            timestamp: U256::from(SqlxRow::try_get::<i64, _>(&row, "timestamp").unwrap_or_default()),
-            gas_used: parse_u256_from_text(SqlxRow::try_get(&row, "gas_used").ok()),
-            gas_limit: parse_u256_from_text(SqlxRow::try_get(&row, "gas_limit").ok()),
-            base_fee_per_gas: parse_option_u256_from_text(SqlxRow::try_get(&row, "base_fee_per_gas").ok()),
-        };
-        Ok(Json(my_block))
-    } else {
-        Err(ApiError::NotFound(format!(
-            "Block with identifier '{}' not found",
-            identifier
-        )))
-    }
+    Ok(Json(my_block))
 }
 
-async fn get_transaction_by_hash_handler(
+/// Get Transaction by Hash
+///
+/// Retrieves a specific transaction by its 0x-prefixed hash.
+#[utoipa::path(
+    get,
+    path = "/transaction/{tx_hash}",
+    params(
+        ("tx_hash" = String, Path, description = "The transaction hash", example = "0x...")
+    ),
+    responses(
+        (status = 200, description = "Transaction found", body = MyTransaction),
+        (status = 404, description = "Transaction not found", body = GenericErrorResponse),
+        (status = 400, description = "Invalid hash format", body = GenericErrorResponse)
+    )
+)]
+pub async fn get_transaction_by_hash_handler(
     State(pool): State<PgPool>,
     Path(tx_hash_param): Path<String>,
 ) -> Result<Json<MyTransaction>, ApiError> {
-    // <--- CHANGED return type
-    println!("Received /transaction/{} request", tx_hash_param);
-
-    // Prepare the tx_hash for query, ensuring it's consistently formatted if necessary
-    // For now, assume tx_hash_param is a "0x..." hex string
-    let mut formatted_tx_hash = tx_hash_param.clone();
-    if !formatted_tx_hash.starts_with("0x") {
-        formatted_tx_hash = format!("0x{}", formatted_tx_hash);
+    if !tx_hash_param.starts_with("0x") || tx_hash_param.len() != 66 {
+        return Err(ApiError::BadRequest("Invalid transaction hash format.".to_string()));
     }
-    // You might also want to convert to lowercase for case-insensitive matching,
-    // depending on how you store/query hashes. Let's assume DB handles it or it's stored consistently.
-
-    let row_option = sqlx::query(
+    
+    let row = sqlx::query(
         "SELECT tx_hash, block_number, block_hash, transaction_index, \
          from_address, to_address, value, gas_price, max_fee_per_gas, \
          max_priority_fee_per_gas, gas_provided, input_data, status \
          FROM transactions WHERE tx_hash = $1",
     )
-    .bind(formatted_tx_hash.to_lowercase()) // Example: bind lowercase if DB stores lowercase
-    .fetch_optional(&pool)
-    .await?; // The ? uses From<sqlx::Error> for ApiError
+    .bind(tx_hash_param.to_lowercase())
+    .fetch_one(&pool).await?;
 
-    if let Some(row) = row_option {
-        use std::str::FromStr; // Required for H256::from_str, Address::from_str
-        use ethers::core::types::{H256, Address, U256, U64}; // Import necessary types
-        use sqlx::Row as SqlxRow; // Import Row and alias it to SqlxRow
+    let my_tx = MyTransaction {
+        tx_hash: H256::from_str(&SqlxRow::try_get::<String, _>(&row, "tx_hash").unwrap_or_default()).unwrap_or_default(),
+        block_number: U64::from(SqlxRow::try_get::<i64, _>(&row, "block_number").unwrap_or_default()),
+        block_hash: H256::from_str(&SqlxRow::try_get::<String, _>(&row, "block_hash").unwrap_or_default()).unwrap_or_default(),
+        transaction_index: SqlxRow::try_get::<Option<i64>, _>(&row, "transaction_index").ok().flatten().map(U64::from),
+        from_address: Address::from_str(&SqlxRow::try_get::<String, _>(&row, "from_address").unwrap_or_default()).unwrap_or_default(),
+        to_address: SqlxRow::try_get::<Option<String>, _>(&row, "to_address").ok().flatten().and_then(|s| Address::from_str(&s).ok()),
+        value: U256::from_dec_str(&SqlxRow::try_get::<String, _>(&row, "value").unwrap_or_default()).unwrap_or_default(),
+        gas_price: SqlxRow::try_get::<Option<String>, _>(&row, "gas_price").ok().flatten().and_then(|s| U256::from_dec_str(&s).ok()),
+        max_fee_per_gas: SqlxRow::try_get::<Option<String>, _>(&row, "max_fee_per_gas").ok().flatten().and_then(|s| U256::from_dec_str(&s).ok()),
+        max_priority_fee_per_gas: SqlxRow::try_get::<Option<String>, _>(&row, "max_priority_fee_per_gas").ok().flatten().and_then(|s| U256::from_dec_str(&s).ok()),
+        gas: U256::from_dec_str(&SqlxRow::try_get::<String, _>(&row, "gas_provided").unwrap_or_default()).unwrap_or_default(),
+        input_data: SqlxRow::try_get(&row, "input_data").unwrap_or_default(),
+        status: SqlxRow::try_get::<Option<i16>, _>(&row, "status").ok().flatten().map(|s| s as u64),
+    };
 
-        // Helper closures for parsing (can be defined once at module level or passed if preferred)
-        let parse_h256_from_str = |s_opt: Option<String>| -> H256 {
-            s_opt.and_then(|s| H256::from_str(&s).ok()).unwrap_or_default()
-        };
-        let parse_address_from_str = |s_opt: Option<String>| -> Address {
-            s_opt.and_then(|s| Address::from_str(&s).ok()).unwrap_or_default()
-        };
-        let parse_option_address_from_str = |s_opt: Option<String>| -> Option<Address> {
-            s_opt.and_then(|s| Address::from_str(&s).ok())
-        };
-        let parse_u256_from_text = |s_opt: Option<String>| -> U256 {
-            s_opt.and_then(|s| U256::from_dec_str(&s).ok()).unwrap_or_default()
-        };
-        let parse_option_u256_from_text = |s_opt: Option<String>| -> Option<U256> {
-            s_opt.and_then(|s| U256::from_dec_str(&s).ok())
-        };
-
-        // Map to MyTransaction struct
-        // Assuming MyTransaction fields for numbers (block_number, transaction_index) are U64/Option<U64>
-        let my_tx = MyTransaction {
-            tx_hash: parse_h256_from_str(SqlxRow::try_get(&row, "tx_hash").ok()),
-            block_number: U64::from(SqlxRow::try_get::<i64, _>(&row, "block_number").unwrap_or_default()),
-            block_hash: parse_h256_from_str(SqlxRow::try_get(&row, "block_hash").ok()),
-            transaction_index: SqlxRow::try_get::<Option<i64>, _>(&row, "transaction_index").ok().flatten().map(U64::from),
-            from_address: parse_address_from_str(SqlxRow::try_get(&row, "from_address").ok()),
-            to_address: parse_option_address_from_str(SqlxRow::try_get(&row, "to_address").ok()),
-            value: parse_u256_from_text(SqlxRow::try_get(&row, "value").ok()),
-            gas_price: parse_option_u256_from_text(SqlxRow::try_get(&row, "gas_price").ok()),
-            max_fee_per_gas: parse_option_u256_from_text(SqlxRow::try_get(&row, "max_fee_per_gas").ok()),
-            max_priority_fee_per_gas: parse_option_u256_from_text(SqlxRow::try_get(&row, "max_priority_fee_per_gas").ok()),
-            gas: parse_u256_from_text(SqlxRow::try_get(&row, "gas_provided").ok()), // Ensure column name "gas_provided" matches table
-            input_data: SqlxRow::try_get(&row, "input_data").unwrap_or_default(),
-            status: SqlxRow::try_get::<Option<i16>, _>(&row, "status").ok().flatten().map(|s| s as u64),
-        };
-        Ok(Json(my_tx))
-    } else {
-        Err(ApiError::NotFound(format!(
-            "Transaction {} not found",
-            tx_hash_param // Use original param for error message
-        )))
-    }
+    Ok(Json(my_tx))
 }
 
-pub(crate) async fn run_api_server(pool: PgPool) -> eyre::Result<()> {
+pub async fn run_api_server(pool: PgPool) -> eyre::Result<()> {
     let app = Router::new()
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .route("/", get(root_handler))
         .route("/logs", post(get_logs_handler))
-        .route("/block/{block_number}", get(get_block_handler))
+        // --- FIX: Use modern Axum path parameter syntax ---
+        .route("/block/{identifier}", get(get_block_handler))
         .route(
             "/transaction/{tx_hash}",
             get(get_transaction_by_hash_handler),
-        ) // **** NEW ROUTE ****
+        )
         .with_state(pool.clone());
 
-    // ... rest of the function ...
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    println!("API server listening on http://{}", addr);
+    println!("API: Server listening on http://{}", addr);
+    println!("API: View Swagger UI at http://{}/swagger-ui", addr);
 
     axum::serve(tokio::net::TcpListener::bind(addr).await?, app)
         .await

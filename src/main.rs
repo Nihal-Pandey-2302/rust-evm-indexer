@@ -3,7 +3,7 @@ mod api;
 mod api_models;
 mod db;
 mod models;
-
+mod docs;
 use dotenvy::dotenv;
 use ethers::{
     providers::{Http, Middleware, Provider}, // Middleware trait is needed for get_block_number, etc.
