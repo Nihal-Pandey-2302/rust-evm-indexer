@@ -1,6 +1,11 @@
 # EVM Indexer in Rust 🦀
 
 A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, built with Rust. This project features a **continuously running ingester** that fetches blocks, transactions, and event logs from an Ethereum node, storing them in PostgreSQL. A **concurrent REST API**, complete with interactive Swagger UI documentation, provides queryable access to the indexed data.
+<div align="center">
+  <img src="https://github.com/Nihal-Pandey-2302/rust-evm-indexer/blob/main/evm-indexer.png" alt="EVM Indexer Architecture Diagram" width="700"/>
+  <br/>
+  <em>Figure 1: High-level architecture of the Rust-based EVM Indexer</em>
+</div>
 
 ## 🌟 Project Goals & Motivation
 
