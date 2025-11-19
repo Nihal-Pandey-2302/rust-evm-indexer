@@ -115,7 +115,7 @@ pub async fn insert_transaction_data(
         max_fee_per_gas_str,
         max_priority_fee_per_gas_str,
         gas_provided_str,
-        tx.input_data,
+        tx.input_data.as_bytes(),
         status_val
     )
     .execute(&mut **executor) // Use the transaction executor
@@ -155,7 +155,7 @@ pub async fn insert_log_data(
         block_number_val,
         block_hash_str,
         contract_address_str,
-        log.data,
+        log.data.as_bytes(),
         topic0,
         topic1,
         topic2,

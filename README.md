@@ -75,13 +75,17 @@ A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, bu
     DATABASE_URL=postgres://indexer_user:YOUR_CHOSEN_PASSWORD@localhost:5432/evm_data_indexer
     ```
 
-4.  **Create Database Tables:**
-    Connect to your database (`psql -U indexer_user -d evm_data_indexer -h localhost`) and execute the table creation SQL found in the `schema.sql` file (or from the previous README version).
+## 🛠️ Database Setup
 
-5.  **Build and Run the Project:**
-    ```bash
-    cargo run
-    ```
+This project requires PostgreSQL.  
+If you're setting it up for the first time, follow the full guide:
+
+➡️ **[DB_SETUP.md](./DB_SETUP.md)**
+
+Once your database is ready, simply run:
+
+```bash
+cargo run
     This command starts both the data ingester and the API server. The API server listens on `http://127.0.0.1:3000`. To stop both, press `Ctrl+C`.
 
 ### Accessing the API Documentation
