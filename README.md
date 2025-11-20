@@ -5,12 +5,10 @@ A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, bu
 <div align="center">
   <img src="./Flowchart.png" alt="EVM Indexer Architecture Flowchart" width="800"/>
   <br/>
-  <em>Figure 2: Detailed Flowchart of the Ingester and API Logic</em>
+  <em>Figure : Detailed Flowchart of the Ingester and API Logic</em>
 </div>
 
-<div align="center">
-  <em>Figure 1: High-level architecture of the Rust-based EVM Indexer</em>
-</div>
+
 
 ## 🌟 Project Goals & Motivation
 
