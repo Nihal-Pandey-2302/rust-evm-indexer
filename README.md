@@ -34,6 +34,19 @@ A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, bu
     *   [x] `GET /block/{identifier}` endpoint (accepts block number or hash).
     *   [x] `GET /transaction/{transaction_hash}` endpoint.
 
+## 🧠 Technical Architecture
+
+### Ingestion Loop (Async Fetching with Tokio)
+The core ingestion logic resides in `src/main.rs`. It operates as a background task spawned via `tokio::spawn`, allowing it to run concurrently with the API server.
+*   **Continuous Polling:** An infinite loop checks for new blocks at a defined interval.
+*   **Batch Processing:** Blocks are fetched in configurable batches to optimize throughput.
+*   **Concurrency:** Network requests (fetching blocks and receipts) are asynchronous, preventing blocking of the main thread.
+
+### Reorg Handling & Atomicity
+*   **Atomic Writes:** The system uses **PostgreSQL Transactions** (`pool.begin().await`) to ensure data integrity. A block, its transactions, and logs are committed as a single unit. If any part fails, the entire block is rolled back.
+*   **Current Reorg Strategy:** The system currently uses `ON CONFLICT DO NOTHING` to handle duplicate block processing.
+*   **Future Reorg Support:** Full chain reorganization handling is planned. This will involve checking the `parent_hash` of new blocks against the local database to detect forks and perform necessary rollbacks.
+
 ## 🛠️ Tech Stack
 
 *   **Language:** Rust (Edition 2021)
