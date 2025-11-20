@@ -42,11 +42,13 @@ The core ingestion logic resides in `src/main.rs`. It operates as a background t
 *   **Batch Processing:** Blocks are fetched in configurable batches to optimize throughput.
 *   **Concurrency:** Network requests (fetching blocks and receipts) are asynchronous, preventing blocking of the main thread.
 
-### Reorg Handling & Atomicity
-*   **Atomic Writes:** The system uses **PostgreSQL Transactions** (`pool.begin().await`) to ensure data integrity. A block, its transactions, and logs are committed as a single unit. If any part fails, the entire block is rolled back.
-*   **Current Reorg Strategy:** The system currently uses `ON CONFLICT DO NOTHING` to handle duplicate block processing.
-*   **Future Reorg Support:** Full chain reorganization handling is planned. This will involve checking the `parent_hash` of new blocks against the local database to detect forks and perform necessary rollbacks.
+### 🛡️ Data Integrity & Reorg Strategy
 
+* **ACID Compliance (Atomic Writes):** The system leverages **PostgreSQL Transactions** (`pool.begin().await`) to ensure state consistency. A block, its transactions, and logs are committed as a single atomic unit. If any insertion fails, the entire block is rolled back, preventing partial state corruption.
+* **Concurrency Strategy:** The ingester currently prioritizes throughput using `ON CONFLICT DO NOTHING` to safely handle overlapping poll cycles without crashing.
+* **Reorg Handling (In Progress):** I have designed a **Recursive Rollback Strategy** to handle chain reorganizations by validating `parent_hash` continuity and performing atomic depth-based rollbacks.
+    * *See the implementation design here:* [Issue #1: Recursive Chain Reorg Handling Strategy](https://github.com/Nihal-Pandey-2302/rust-evm-indexer/issues/1)
+      
 ## 🛠️ Tech Stack
 
 *   **Language:** Rust (Edition 2021)
@@ -125,12 +127,13 @@ You can explore all available endpoints, see their request/response models, and 
     *   **Transactional Inserts:** Guarantees atomic data writes on a per-block basis.
     *   **V1 API Complete:** All key endpoints for querying blocks, transactions, and logs are implemented.
     *   **Interactive Documentation:** The API is fully documented and testable via an integrated Swagger UI.
+    *   **Atomic Writes:** Uses strict database transactions to ensure block data integrity, preventing partial state commits during ingestion.
 
 *   **Next Steps (Focus on Performance & Enhancements):**
     1.  **Performance for Historical Sync:** Optimize bulk ingestion (e.g., explore batch JSON-RPC calls).
     2.  **Configuration:** Make ingester parameters (batch sizes, poll intervals) configurable via `.env`.
     3.  **Advanced API Filtering:** Enhance `POST /logs` with more complex filter logic (e.g., multiple addresses, OR logic for topics).
-    4.  **Reorg Handling:** Implement logic in the ingester to gracefully handle chain reorganizations.
+
 
 ## 📜 License
 
