@@ -1,0 +1,54 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: evm-indexer-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: indexer_user
+      POSTGRES_PASSWORD: indexer_password
+      POSTGRES_DB: evm_data_indexer
+    volumes:
+      # Persist database data
+      - postgres_data:/var/lib/postgresql/data
+      # Initialize database schema
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U indexer_user -d evm_data_indexer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - evm-indexer-network
+
+  # Rust EVM Indexer Application
+  indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: evm-indexer-app
+    restart: unless-stopped
+    environment:
+      # Ethereum RPC URL - Replace with your actual RPC endpoint
+      ETH_RPC_URL: ${ETH_RPC_URL:-https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY}
+      # Database connection string
+      DATABASE_URL: postgres://indexer_user:indexer_password@postgres:5432/evm_data_indexer
+      # Rust logging level
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - evm-indexer-network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  evm-indexer-network:
+    driver: bridge

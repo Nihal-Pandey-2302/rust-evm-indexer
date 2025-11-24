@@ -296,7 +296,7 @@ pub async fn run_api_server(pool: PgPool) -> eyre::Result<()> {
         )
         .with_state(pool.clone());
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     println!("API: Server listening on http://{}", addr);
     println!("API: View Swagger UI at http://{}/swagger-ui", addr);
 

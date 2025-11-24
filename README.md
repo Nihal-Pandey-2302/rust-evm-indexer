@@ -42,13 +42,11 @@ The core ingestion logic resides in `src/main.rs`. It operates as a background t
 *   **Batch Processing:** Blocks are fetched in configurable batches to optimize throughput.
 *   **Concurrency:** Network requests (fetching blocks and receipts) are asynchronous, preventing blocking of the main thread.
 
-### 🛡️ Data Integrity & Reorg Strategy
+### Reorg Handling & Atomicity
+*   **Atomic Writes:** The system uses **PostgreSQL Transactions** (`pool.begin().await`) to ensure data integrity. A block, its transactions, and logs are committed as a single unit. If any part fails, the entire block is rolled back.
+*   **Current Reorg Strategy:** The system currently uses `ON CONFLICT DO NOTHING` to handle duplicate block processing.
+*   **Future Reorg Support:** Full chain reorganization handling is planned. This will involve checking the `parent_hash` of new blocks against the local database to detect forks and perform necessary rollbacks.
 
-* **ACID Compliance (Atomic Writes):** The system leverages **PostgreSQL Transactions** (`pool.begin().await`) to ensure state consistency. A block, its transactions, and logs are committed as a single atomic unit. If any insertion fails, the entire block is rolled back, preventing partial state corruption.
-* **Concurrency Strategy:** The ingester currently prioritizes throughput using `ON CONFLICT DO NOTHING` to safely handle overlapping poll cycles without crashing.
-* **Reorg Handling (In Progress):** I have designed a **Recursive Rollback Strategy** to handle chain reorganizations by validating `parent_hash` continuity and performing atomic depth-based rollbacks.
-    * *See the implementation design here:* [Issue #1: Recursive Chain Reorg Handling Strategy](https://github.com/Nihal-Pandey-2302/rust-evm-indexer/issues/1)
-      
 ## 🛠️ Tech Stack
 
 *   **Language:** Rust (Edition 2021)
@@ -60,7 +58,72 @@ The core ingestion logic resides in `src/main.rs`. It operates as a background t
 *   **Configuration:** `dotenvy`
 *   **Serialization:** `serde`
 
+
 ## 🚀 Getting Started
+
+You can run this project either with **Docker** (recommended for quick setup) or **manually** with a local Rust installation.
+
+---
+
+## 🐳 Option 1: Docker Deployment (Recommended)
+
+The easiest way to get started! Docker handles all dependencies, database setup, and networking automatically.
+
+### Prerequisites
+
+*   [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) installed
+*   An Ethereum JSON-RPC endpoint (e.g., from [Alchemy](https://www.alchemy.com/), [Infura](https://infura.io/), or [QuickNode](https://www.quicknode.com/))
+
+### Quick Start with Docker
+
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/Nihal-Pandey-2302/rust-evm-indexer.git
+    cd rust-evm-indexer
+    ```
+
+2.  **Set up environment variables:**
+    ```bash
+    cp .env.example .env
+    ```
+    Edit `.env` and add your Ethereum RPC URL:
+    ```env
+    ETH_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY_HERE
+    ```
+
+3.  **Start the application:**
+    ```bash
+    docker-compose up -d
+    ```
+
+That's it! 🎉 The indexer and database are now running.
+
+*   **API Server:** [http://localhost:3000](http://localhost:3000)
+*   **Swagger UI:** [http://localhost:3000/swagger-ui](http://localhost:3000/swagger-ui)
+
+### Docker Commands
+
+```bash
+# View logs
+docker-compose logs -f indexer
+
+# Stop the application
+docker-compose down
+
+# Stop and remove all data (including database)
+docker-compose down -v
+
+# Rebuild after code changes
+docker-compose up -d --build
+```
+
+**For detailed Docker documentation, troubleshooting, and advanced usage, see [DOCKER.md](./DOCKER.md)**
+
+---
+
+## 🔧 Option 2: Manual Installation
+
+If you prefer to run without Docker or need more control over the setup.
 
 ### Prerequisites
 

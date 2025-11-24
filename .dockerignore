@@ -1,0 +1,13 @@
+target/
+.git/
+.gitignore
+.env
+*.md
+!DB_SETUP.md
+Dockerfile
+docker-compose.yml
+.dockerignore
+*.png
+assets/
+.vscode/
+.qodo/
