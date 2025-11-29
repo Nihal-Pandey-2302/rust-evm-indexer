@@ -20,7 +20,7 @@ use models::{MyBlock, MyLog, MyTransaction}; // Assuming these are still used by
 // --- Constants for Ingester ---
 const POLL_INTERVAL_SECONDS: u64 = 10; // Check for new blocks every 10 seconds
 const BLOCKS_PER_BATCH: u64 = 5; // Process up to 5 blocks per cycle
-const DEFAULT_START_BLOCK: u64 = 0; // Or your desired actual genesis/start block for a full sync
+const DEFAULT_START_BLOCK: u64 = 23900790; // Start from a recent block for testing
 const MAX_RECEIPT_RETRIES: u32 = 3;
 const BASE_RECEIPT_BACKOFF_SECONDS: u64 = 1;
 const MAX_BLOCK_FETCH_RETRIES: u32 = 3;
@@ -144,7 +144,12 @@ async fn run_continuous_ingester(provider: Provider<Http>, pool: PgPool) -> Resu
                 };
                 db::insert_block_data(&mut db_tx, &my_block).await.map_err(|e| eyre::eyre!("DB: Insert block {} failed: {}", my_block.block_number, e))?;
 
-                for ethers_tx in ethers_block.transactions {
+                let transactions = ethers_block.transactions;
+                let total_txs = transactions.len();
+                for (idx, ethers_tx) in transactions.into_iter().enumerate() {
+                    if idx % 20 == 0 || idx == total_txs - 1 {
+                        println!("   -> Processing tx {}/{}...", idx + 1, total_txs);
+                    }
                     let mut receipt_option_for_tx: Option<ethers::types::TransactionReceipt> = None;
                     for attempt in 1..=MAX_RECEIPT_RETRIES {
                         match provider.get_transaction_receipt(ethers_tx.hash).await {

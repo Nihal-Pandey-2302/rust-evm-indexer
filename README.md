@@ -99,7 +99,8 @@ The easiest way to get started! Docker handles all dependencies, database setup,
 That's it! 🎉 The indexer and database are now running.
 
 *   **API Server:** [http://localhost:3000](http://localhost:3000)
-*   **Swagger UI:** [http://localhost:3000/swagger-ui](http://localhost:3000/swagger-ui)
+*   **Swagger UI:** [http://localhost:3000/swagger-ui](http://localhost:
+3000/swagger-ui)
 
 ### Docker Commands
 
