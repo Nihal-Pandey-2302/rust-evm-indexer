@@ -127,8 +127,7 @@ The easiest way to get started! Docker handles all dependencies, database setup,
 That's it! 🎉 The indexer and database are now running.
 
 *   **API Server:** [http://localhost:3000](http://localhost:3000)
-*   **Swagger UI:** [http://localhost:3000/swagger-ui](http://localhost:
-3000/swagger-ui)
+*   **Swagger UI:** [http://localhost:3000/swagger-ui](http://localhost:3000/swagger-ui)
 
 ### Docker Commands
 
@@ -213,21 +212,6 @@ Once the server is running, you can access the live, interactive Swagger UI docu
 You can explore all available endpoints, see their request/response models, and execute API calls directly from the documentation page.
 
 ![Swagger UI Preview](https://github.com/Nihal-Pandey-2302/rust-evm-indexer/blob/main/assets/Swagger%20UI.png)
-
-## 🗺️ Project Status & Roadmap
-
-*   **Current Status:**
-    *   **Concurrent Operation:** Ingester and API server run concurrently.
-    *   **Stateful & Resilient Ingester:** Features state management and retry logic.
-    *   **Transactional Inserts:** Guarantees atomic data writes on a per-block basis.
-    *   **V1 API Complete:** All key endpoints for querying blocks, transactions, and logs are implemented.
-    *   **Interactive Documentation:** The API is fully documented and testable via an integrated Swagger UI.
-    *   **Atomic Writes:** Uses strict database transactions to ensure block data integrity, preventing partial state commits during ingestion.
-
-*   **Next Steps (Focus on Performance & Enhancements):**
-    1.  **Performance for Historical Sync:** Optimize bulk ingestion (e.g., explore batch JSON-RPC calls).
-    2.  **Configuration:** Make ingester parameters (batch sizes, poll intervals) configurable via `.env`.
-    3.  **Advanced API Filtering:** Enhance `POST /logs` with more complex filter logic (e.g., multiple addresses, OR logic for topics).
 
 
 ## ⚡ Performance
