@@ -1,9 +1,7 @@
 // src/models.rs
-
-use ethers::core::types::{Address, H256, U256, U64};
+use ethers::types::{Address, H256, U256, U64};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema; // Import ToSchema
-use sqlx::FromRow;
 
 // --- Annotate each struct with ToSchema and its fields ---
 

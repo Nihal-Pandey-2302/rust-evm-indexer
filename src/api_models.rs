@@ -40,6 +40,14 @@ pub struct GetLogsFilter {
     pub page_size: u64,
 }
 
+#[derive(Serialize, ToSchema)]
+pub struct IndexerStats {
+    pub total_blocks: i64,
+    pub total_transactions: i64,
+    pub total_logs: i64,
+    pub last_synced_block: Option<i64>,
+}
+
 // A generic, serializable error response struct for consistent API errors.
 #[derive(Serialize, ToSchema)]
 pub struct GenericErrorResponse {

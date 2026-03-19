@@ -132,7 +132,7 @@ pub async fn insert_log_data(
     let tx_hash_str = format!("{:#x}", log.transaction_hash);
     let block_hash_str = format!("{:#x}", log.block_hash);
     let contract_address_str = format!("{:#x}", log.address);
-    let topic0 = log.topics.get(0).map(|s| s.as_str());
+    let topic0 = log.topics.first().map(|s| s.as_str());
     let topic1 = log.topics.get(1).map(|s| s.as_str());
     let topic2 = log.topics.get(2).map(|s| s.as_str());
     let topic3 = log.topics.get(3).map(|s| s.as_str());
