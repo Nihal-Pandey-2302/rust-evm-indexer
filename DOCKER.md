@@ -87,6 +87,7 @@ The following environment variables can be configured in `.env`:
 |----------|-------------|---------|----------|
 | `ETH_RPC_URL` | Ethereum JSON-RPC endpoint | - | ✅ Yes |
 | `DATABASE_URL` | PostgreSQL connection string | Auto-configured | ❌ No |
+| `START_BLOCK` | Starting block for ingestion | - | ❌ No |
 | `RUST_LOG` | Logging level (error/warn/info/debug/trace) | `info` | ❌ No |
 
 ### Database Configuration
