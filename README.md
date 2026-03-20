@@ -5,25 +5,14 @@ A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, bu
 ### Ingestion Pipeline
 
 ```mermaid
-flowchart LR
-    Node((Ethereum Node)) -->|get_block_with_txs| Poll[Poll Loop]
-
-    Poll --> ReorgCheck{Parent hash
-matches DB?}
-    ReorgCheck -->|mismatch| Rollback["🔁 DELETE
-logs → txs → blocks"]
+flowchart TD
+    Node([Ethereum Node]) --> Poll[Poll for new block]
+    Poll --> Reorg{Parent hash match?}
+    Reorg -->|no - reorg| Rollback[Delete blocks + txs + logs from fork height]
     Rollback --> Poll
-
-    ReorgCheck -->|ok| Phase1
-
-    Node -->|"get_receipt × N
-buffer_unordered(10)"| Phase1["Phase 1
-Parallel Receipt Fetch"]
-    Phase1 --> Phase2["Phase 2
-Sequential DB Write
-atomic commit"]
-
-    Phase2 --> DB[(PostgreSQL)]
+    Reorg -->|yes| Fetch[Fetch all receipts in parallel]
+    Fetch --> Write[Atomic commit: block + txs + logs]
+    Write --> Poll
 ```
 
 ### API Layer
