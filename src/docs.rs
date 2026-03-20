@@ -1,5 +1,5 @@
 // src/docs.rs
-use crate::api_models::{GenericErrorResponse, GetLogsFilter, IndexerStats};
+use crate::api_models::{GenericErrorResponse, GetLogsFilter, IndexerStats, LogsResponse};
 use crate::models::{MyBlock, MyLog, MyTransaction};
 use utoipa::OpenApi;
 
@@ -18,6 +18,7 @@ use utoipa::OpenApi;
             GetLogsFilter,
             GenericErrorResponse,
             IndexerStats,
+            LogsResponse,
             // Core DB Models
             MyBlock,
             MyTransaction,
