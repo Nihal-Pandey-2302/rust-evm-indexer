@@ -5,27 +5,64 @@ A high-performance Ethereum Virtual Machine (EVM) data indexer and query API, bu
 ```mermaid
 flowchart TB
     subgraph External
-        Node((Ethereum Node\nAlchemy/Infura))
+        Node((Ethereum Node
+Alchemy / Infura))
     end
-    
-    subgraph Rust EVM Indexer
+
+    subgraph Ingester["Tokio Background Task — Ingester"]
         direction TB
-        subgraph Tokio Runtime
-            Ingester[Background Ingester Task]
-            Server[Axum API Server]
-        end
-        
-        subgraph PostgreSQL
-            DB[(Relational DB\nBlocks, Txs, Logs)]
-        end
+        Poll[Poll for new blocks]
+        ReorgCheck{"Parent hash
+matches DB?"}
+        Rollback["DELETE-based rollback
+logs → txs → blocks"]
+        Phase1["Phase 1: Parallel Receipt Fetch
+buffer_unordered(10)"]
+        Phase2["Phase 2: Sequential DB Write
+atomic sqlx transaction"]
     end
-    
-    Node -- JSON-RPC fetch --> Ingester
-    Ingester -- sqlx Atomic Commits --> DB
-    Server -- sqlx Queries --> DB
-    
-    Client[Users/Clients] -- REST /blocks, /logs, /stats --> Server
-    Swagger[Swagger UI] -- OpenAPI Config --> Server
+
+    subgraph API["Tokio Task — Axum API Server"]
+        direction TB
+        StatsEP["GET /stats
+total_blocks, txs, logs
+ingestion_lag"]
+        LogsEP["POST /logs
+cursor pagination
+(block_number, id)"]
+        BlockEP["GET /block/:id"]
+        TxEP["GET /transaction/:hash"]
+        Swagger["Swagger UI"]
+    end
+
+    subgraph DB["PostgreSQL"]
+        Blocks[("blocks
+PK: block_hash")]
+        Txs[(transactions)]
+        Logs[("logs
+idx: topic0+block
+idx: block+address")]
+        Status[("indexer_status
+last_synced
+chain_head")]
+    end
+
+    Node -- get_block_with_txs --> Poll
+    Poll --> ReorgCheck
+    ReorgCheck -- mismatch --> Rollback
+    Rollback --> Poll
+    ReorgCheck -- ok --> Phase1
+    Node -- "get_receipt x N
+buffer_unordered" --> Phase1
+    Phase1 --> Phase2
+    Phase2 -- atomic commit --> Blocks & Txs & Logs & Status
+
+    Client[Users / Clients] --> StatsEP & LogsEP & BlockEP & TxEP
+    StatsEP --> Status
+    LogsEP --> Logs
+    BlockEP --> Blocks
+    TxEP --> Txs
+    Swagger -. OpenAPI spec .-> API
 ```
 
 
