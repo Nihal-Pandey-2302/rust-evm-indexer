@@ -8,7 +8,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 // --- Imports for Axum and Business Logic ---
 use crate::{
-    api_models::{GetLogsFilter, IndexerStats},
+    api_models::{GetLogsFilter, IndexerStats, LogsResponse},
     models::{MyBlock, MyLog, MyTransaction},
 };
 use axum::{
@@ -39,7 +39,7 @@ impl IntoResponse for ApiError {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             ApiError::InternalServerError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             ApiError::DatabaseError(db_err) => {
-                eprintln!("Database error: {:?}", db_err);
+                tracing::error!("Database error: {:?}", db_err);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "A database error occurred".to_string(),
@@ -95,13 +95,15 @@ pub async fn root_handler() -> Html<&'static str> {
 
 /// Get Filtered Logs
 ///
-/// Retrieves a paginated list of event logs based on a set of filters provided in the request body.
+/// Retrieves a paginated list of event logs. Supports both offset pagination (page/page_size)
+/// and stable cursor-based pagination (cursor_block + cursor_log_id from a previous response).
+/// Cursor-based pagination is preferred at scale — O(log n) vs OFFSET's O(n) full scan.
 #[utoipa::path(
     post,
     path = "/logs",
     request_body = GetLogsFilter,
     responses(
-        (status = 200, description = "Successfully retrieved logs", body = [MyLog]),
+        (status = 200, description = "Successfully retrieved logs", body = LogsResponse),
         (status = 400, description = "Bad request due to invalid filters", body = GenericErrorResponse),
         (status = 500, description = "Internal server error", body = GenericErrorResponse),
     )
@@ -109,19 +111,18 @@ pub async fn root_handler() -> Html<&'static str> {
 async fn get_logs_handler(
     State(pool): State<PgPool>,
     Json(filters): Json<GetLogsFilter>,
-) -> Result<Json<Vec<MyLog>>, ApiError> {
-    let page = filters.page.max(1);
+) -> Result<Json<LogsResponse>, ApiError> {
     let page_size = filters.page_size.clamp(1, MAX_PAGE_SIZE);
-    let offset = (page - 1) * page_size;
+    let use_cursor = filters.cursor_block.is_some() || filters.cursor_log_id.is_some();
 
     let mut query_builder: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
-        "SELECT log_index, transaction_hash, transaction_index, \
-         block_number, block_hash, address, data, topics \
-         FROM logs",
+        "SELECT id, log_index_in_tx AS log_index, transaction_hash, \
+         transaction_index_in_block AS transaction_index, \
+         block_number, block_hash, contract_address AS address, \
+         ENCODE(data, 'escape') AS data, all_topics AS topics \
+         FROM logs WHERE 1=1",
     );
-    query_builder.push(" WHERE 1=1");
 
-    // --- FIX: Restore full filter logic to resolve warnings ---
     if let Some(bh_filter) = &filters.block_hash {
         query_builder.push(" AND LOWER(block_hash) = LOWER(");
         query_builder.push_bind(bh_filter);
@@ -137,68 +138,94 @@ async fn get_logs_handler(
         }
     }
     if let Some(addr_filter) = &filters.address {
-        query_builder.push(" AND LOWER(address) = LOWER(");
+        query_builder.push(" AND LOWER(contract_address) = LOWER(");
         query_builder.push_bind(addr_filter);
         query_builder.push(")");
     }
-    // This assumes your DB schema has separate columns topic0, topic1, etc.
-    // If you only have a `topics` array, the query would need to be different.
-    if let Some(topic0_filter) = &filters.topic0 {
-        query_builder.push(" AND topics[1] = "); // PG arrays are 1-indexed
-        query_builder.push_bind(topic0_filter);
+    if let Some(t) = &filters.topic0 {
+        query_builder.push(" AND topic0 = ");
+        query_builder.push_bind(t);
     }
-    if let Some(topic1_filter) = &filters.topic1 {
-        query_builder.push(" AND topics[2] = ");
-        query_builder.push_bind(topic1_filter);
+    if let Some(t) = &filters.topic1 {
+        query_builder.push(" AND topic1 = ");
+        query_builder.push_bind(t);
     }
-    if let Some(topic2_filter) = &filters.topic2 {
-        query_builder.push(" AND topics[3] = ");
-        query_builder.push_bind(topic2_filter);
+    if let Some(t) = &filters.topic2 {
+        query_builder.push(" AND topic2 = ");
+        query_builder.push_bind(t);
     }
-    if let Some(topic3_filter) = &filters.topic3 {
-        query_builder.push(" AND topics[4] = ");
-        query_builder.push_bind(topic3_filter);
+    if let Some(t) = &filters.topic3 {
+        query_builder.push(" AND topic3 = ");
+        query_builder.push_bind(t);
     }
 
-    query_builder.push(" ORDER BY block_number ASC, transaction_index ASC, log_index ASC");
-    query_builder.push(" LIMIT ");
+    // Cursor: WHERE (block_number, id) > ($cursor_block, $cursor_log_id)
+    // Deterministic ordering, no duplicate/skipped rows, O(log n) with composite index.
+    if use_cursor {
+        let cb = filters.cursor_block.unwrap_or(0);
+        let cl = filters.cursor_log_id.unwrap_or(0);
+        query_builder.push(" AND (block_number, id) > (");
+        query_builder.push_bind(cb);
+        query_builder.push(", ");
+        query_builder.push_bind(cl);
+        query_builder.push(")");
+    }
+
+    query_builder.push(" ORDER BY block_number ASC, id ASC LIMIT ");
     query_builder.push_bind(page_size as i64);
-    query_builder.push(" OFFSET ");
-    query_builder.push_bind(offset as i64);
+
+    if !use_cursor {
+        let page = filters.page.max(1);
+        let offset = (page - 1) * page_size;
+        query_builder.push(" OFFSET ");
+        query_builder.push_bind(offset as i64);
+    }
 
     let rows = query_builder.build().fetch_all(&pool).await?;
 
-    let logs_result = rows
+    let mut next_cursor_block: Option<i64> = None;
+    let mut next_cursor_log_id: Option<i64> = None;
+
+    let logs = rows
         .into_iter()
         .map(|row| -> Result<MyLog, ApiError> {
+            let row_id: i64 = SqlxRow::try_get(&row, "id")?;
+            let block_num: i64 = SqlxRow::try_get(&row, "block_number")?;
+            next_cursor_block = Some(block_num);
+            next_cursor_log_id = Some(row_id);
+
             Ok(MyLog {
-                log_index: SqlxRow::try_get::<Option<String>, _>(&row, "log_index")?
-                    .and_then(|s| U256::from_dec_str(&s).ok()),
+                log_index: SqlxRow::try_get::<Option<i64>, _>(&row, "log_index")?
+                    .and_then(|v| U256::from_dec_str(&v.to_string()).ok()),
                 transaction_hash: H256::from_str(&SqlxRow::try_get::<String, _>(
                     &row,
                     "transaction_hash",
                 )?)
                 .map_err(|e| {
-                    ApiError::InternalServerError(format!("Invalid transaction_hash format: {}", e))
+                    ApiError::InternalServerError(format!("Invalid transaction_hash: {}", e))
                 })?,
                 transaction_index: SqlxRow::try_get::<Option<i64>, _>(&row, "transaction_index")?
                     .map(|v| v as u64),
-                block_number: SqlxRow::try_get::<i64, _>(&row, "block_number")? as u64,
+                block_number: block_num as u64,
                 block_hash: H256::from_str(&SqlxRow::try_get::<String, _>(&row, "block_hash")?)
                     .map_err(|e| {
-                        ApiError::InternalServerError(format!("Invalid block_hash format: {}", e))
+                        ApiError::InternalServerError(format!("Invalid block_hash: {}", e))
                     })?,
                 address: Address::from_str(&SqlxRow::try_get::<String, _>(&row, "address")?)
                     .map_err(|e| {
-                        ApiError::InternalServerError(format!("Invalid address format: {}", e))
+                        ApiError::InternalServerError(format!("Invalid address: {}", e))
                     })?,
-                data: SqlxRow::try_get(&row, "data")?,
-                topics: SqlxRow::try_get(&row, "topics")?,
+                data: SqlxRow::try_get::<Option<String>, _>(&row, "data")?.unwrap_or_default(),
+                topics: SqlxRow::try_get(&row, "topics").unwrap_or_default(),
             })
         })
         .collect::<Result<Vec<MyLog>, ApiError>>()?;
 
-    Ok(Json(logs_result))
+    Ok(Json(LogsResponse {
+        logs,
+        next_cursor_block,
+        next_cursor_log_id,
+    }))
 }
 
 /// Get Indexer Stats
@@ -223,17 +250,19 @@ pub async fn get_stats_handler(State(pool): State<PgPool>) -> Result<Json<Indexe
         .fetch_one(&pool)
         .await?;
 
-    let last_synced_block: Option<(i64,)> = sqlx::query_as(
-        "SELECT last_processed_block FROM indexer_status WHERE indexer_name = 'evm_main_sync'",
-    )
-    .fetch_optional(&pool)
-    .await?;
+    // Fetch last_processed_block and chain_head for lag calculation
+    let status = crate::db::get_indexer_status(&pool).await?;
+    let (last_synced_block, ingestion_lag) = match status {
+        Some((last, head)) => (Some(last), Some(head - last)),
+        None => (None, None),
+    };
 
     Ok(Json(IndexerStats {
         total_blocks: total_blocks.0,
         total_transactions: total_transactions.0,
         total_logs: total_logs.0,
-        last_synced_block: last_synced_block.map(|r| r.0),
+        last_synced_block,
+        ingestion_lag,
     }))
 }
 

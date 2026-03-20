@@ -4,13 +4,15 @@
 -- indexer status table
 CREATE TABLE IF NOT EXISTS indexer_status (
   indexer_name TEXT PRIMARY KEY,
-  last_processed_block BIGINT
+  last_processed_block BIGINT,
+  chain_head_at_last_poll BIGINT
 );
 
 -- blocks table
+-- PK is block_hash to allow multiple blocks at the same height (canonical + uncle blocks)
 CREATE TABLE IF NOT EXISTS blocks (
-  block_number BIGINT PRIMARY KEY,
-  block_hash TEXT NOT NULL,
+  block_hash TEXT PRIMARY KEY,
+  block_number BIGINT NOT NULL,
   parent_hash TEXT NOT NULL,
   timestamp BIGINT NOT NULL,
   gas_used TEXT NOT NULL,
@@ -18,8 +20,8 @@ CREATE TABLE IF NOT EXISTS blocks (
   base_fee_per_gas TEXT
 );
 
--- Create index on block_hash for faster lookups
-CREATE INDEX IF NOT EXISTS idx_blocks_hash ON blocks(block_hash);
+-- Index on block_number for fast height lookups (non-unique: multiple blocks can share a height)
+CREATE INDEX IF NOT EXISTS idx_blocks_number ON blocks(block_number);
 
 -- transactions table
 CREATE TABLE IF NOT EXISTS transactions (
@@ -66,3 +68,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_contract_address ON logs(contract_address);
 CREATE INDEX IF NOT EXISTS idx_logs_transaction_hash ON logs(transaction_hash);
 CREATE INDEX IF NOT EXISTS idx_logs_topic0 ON logs(topic0);
 CREATE INDEX IF NOT EXISTS idx_logs_topic1 ON logs(topic1);
+-- High-selectivity composite: most log queries filter by event signature + block range
+CREATE INDEX IF NOT EXISTS idx_logs_topic0_block ON logs(topic0, block_number);
+-- Composite for address + block range queries
+CREATE INDEX IF NOT EXISTS idx_logs_composite ON logs(block_number, contract_address);

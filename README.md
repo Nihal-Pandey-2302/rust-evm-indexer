@@ -62,14 +62,27 @@ The core ingestion logic resides in `src/main.rs`. It operates as a background t
 
 ### Reorg Handling & Atomicity
 *   **Atomic Writes:** The system uses **PostgreSQL Transactions** (`pool.begin().await`) to ensure data integrity. A block, its transactions, and logs are committed as a single unit. If any part fails, the entire block is rolled back.
-*   **Current Reorg Strategy:** The system currently uses `ON CONFLICT DO NOTHING` to handle duplicate block processing.
-*   **Reorg Support:** Implemented basic reorg detection via parent hash validation. The next step is handling deep reorgs across multiple blocks.
+*   **Canonical chain awareness:** The `blocks` table uses `block_hash` as the primary key, allowing multiple blocks at the same height (canonical and uncle blocks) to coexist safely.
+*   **Reorg Handling:** On each new block, the ingester validates `parent_hash` against the stored hash of the previous height. On a mismatch, it performs a DELETE-based rollback — removing logs, transactions, and blocks at or above the fork height — then re-ingests from the common ancestor. This ensures the dataset is always strictly canonical.
 
 ## 📐 Design Decisions
 
-*   **Why atomic per-block transactions:** a partial block write, where transactions are committed but logs are not, creates an inconsistent state that is difficult to detect and expensive to repair. Wrapping each block in a database transaction means the entire block either commits or rolls back. The ingester can always resume from the last fully committed block without manual intervention.
-*   **Why ON CONFLICT DO NOTHING for idempotency:** if the ingester crashes mid-batch and restarts, it will attempt to re-insert blocks it already processed. A naive INSERT would fail with a unique constraint violation and halt ingestion. ON CONFLICT DO NOTHING allows safe re-processing of any block without duplicates and without errors.
-*   **Why concurrent ingester and API server:** separating ingestion from query serving via tokio::spawn means a slow query never blocks block ingestion and an ingestion backlog never degrades API response times. Each concern operates independently on the async runtime.
+*   **Why atomic per-block transactions:** a partial block write creates inconsistent state that is expensive to repair. Each block commits atomically; on failure the entire block rolls back and ingestion resumes cleanly on the next cycle.
+*   **Why `ON CONFLICT DO NOTHING` for idempotency:** if the ingester crashes and restarts, it will re-attempt already-processed blocks. `ON CONFLICT DO NOTHING` allows safe re-processing without unique constraint failures.
+*   **Why concurrent ingester and API server:** `tokio::spawn` separates ingestion from query serving — a slow query never blocks ingestion, and an ingestion backlog never degrades API latency.
+
+## ⚖️ Design Tradeoffs
+
+*   **Why DELETE-based reorg rollback (not `is_canonical` flag):** maintaining an `is_canonical` column requires filtering every query with `WHERE is_canonical = TRUE` and cascading joins across blocks, transactions, and logs. DELETE-based rollback keeps queries simple and the dataset strictly canonical at all times.
+
+*   **Why parallelized RPC, sequential DB writes:** receipt fetching is parallelized with `buffer_unordered(10)` to saturate I/O. All DB writes remain sequential within a single `sqlx` transaction. Mixing concurrent tasks with a shared transaction handle would cause panics or deadlocks — the two-phase approach gives throughput without sacrificing consistency.
+
+*   **Why cursor-based pagination over `OFFSET`:** `OFFSET N` requires the database to scan and discard `N` rows before returning results. At scale (millions of logs), this becomes O(N). Cursor-based pagination (`WHERE (block_number, id) > (cursor_block, cursor_id)`) uses the composite B-tree index and is O(log N) regardless of depth.
+
+*   **Why not a full parallel pipeline yet:** a stage-based pipeline (fetch → transform → write) introduces ordering complexity, makes rollback harder to reason about, and requires bounded channels between stages. The current design prioritizes correctness and simplicity; the architecture is structured to add this incrementally.
+
+*   **On per-transaction receipts vs `eth_getLogs`:** the current design fetches receipts per transaction, which causes N+1 RPC calls per block. `eth_getLogs` can retrieve all logs for a block range in a single call and is the correct long-term approach, but requires careful deduplication and schema alignment. This is the highest-impact future optimization.
+
 
 ## 🛠️ Tech Stack
 

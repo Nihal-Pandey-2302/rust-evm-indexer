@@ -38,6 +38,13 @@ pub struct GetLogsFilter {
     #[serde(default = "default_page_size", alias = "limit")]
     #[param(example = 25)]
     pub page_size: u64,
+
+    // Cursor-based pagination fields (preferred over page/offset at scale)
+    // Use values from `next_cursor` in a previous response.
+    #[schema(example = 18000000)]
+    pub cursor_block: Option<i64>,
+    #[schema(example = 42)]
+    pub cursor_log_id: Option<i64>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -46,6 +53,16 @@ pub struct IndexerStats {
     pub total_transactions: i64,
     pub total_logs: i64,
     pub last_synced_block: Option<i64>,
+    /// Difference between chain head and last synced block at last poll
+    pub ingestion_lag: Option<i64>,
+}
+
+/// Cursor returned with paginated log responses for stable iteration.
+#[derive(Serialize, ToSchema)]
+pub struct LogsResponse {
+    pub logs: Vec<crate::models::MyLog>,
+    pub next_cursor_block: Option<i64>,
+    pub next_cursor_log_id: Option<i64>,
 }
 
 // A generic, serializable error response struct for consistent API errors.
